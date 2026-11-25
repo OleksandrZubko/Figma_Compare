@@ -4,7 +4,9 @@ public enum DevicePlatform { Android, Ios }
 
 /// <summary>Elemento de la pantalla del dispositivo, en unidades lógicas (dp en Android, pt en iOS).</summary>
 /// <param name="Id">AutomationId: el resource-id en Android, el accessibilityIdentifier en iOS.</param>
-public sealed record ScreenElement(string? Id, string ClassName, string? Text, string? ContentDescription, Rect Bounds);
+/// <param name="Runtime">Properties read from the running app (Frida on Android); null if they weren't read.</param>
+public sealed record ScreenElement(string? Id, string ClassName, string? Text, string? ContentDescription, Rect Bounds,
+    RuntimeProps? Runtime = null);
 
 /// <summary>App que estaba en primer plano al tomar la captura.</summary>
 /// <param name="Id">Paquete en Android, bundle id en iOS.</param>
@@ -19,6 +21,7 @@ public sealed record AppInfo(string Id, string? Version, DateTime? DeployedAt)
 }
 
 /// <param name="PixelsPerUnit">Píxeles de la captura por unidad lógica: densidad / 160 en Android, la escala de la pantalla (2 o 3) en iOS.</param>
+/// <param name="RuntimeError">Why the runtime properties (Frida) couldn't be read; null if they were or Frida is off.</param>
 public sealed record ScreenCapture(
     string Serial,
     string ScreenshotPath,
@@ -27,8 +30,12 @@ public sealed record ScreenCapture(
     double PixelsPerUnit,
     IReadOnlyList<ScreenElement> Elements,
     DevicePlatform Platform = DevicePlatform.Android,
-    AppInfo? App = null)
+    AppInfo? App = null,
+    string? RuntimeError = null)
 {
+    /// <summary>Elements with runtime properties.</summary>
+    public int RuntimeCount => Elements.Count(e => e.Runtime is not null);
+
     /// <summary>Factor px → unidad lógica.</summary>
     public double PxToUnit => 1 / PixelsPerUnit;
     public double WidthUnits => WidthPx * PxToUnit;

@@ -11,6 +11,17 @@ public sealed class Settings
     public string AdbPath { get; } = ResolveAdb();
 
     /// <summary>
+    /// Reads text size, typeface, colors and corner radius from the running Android app with Frida
+    /// (see tools/frida-probe). DRIFTCHECK_FRIDA=off turns it off; by default it's tried on every capture.
+    /// </summary>
+    public bool FridaEnabled =>
+        !string.Equals(Environment.GetEnvironmentVariable("DRIFTCHECK_FRIDA"), "off", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Python with the frida module, for the Frida probe. DRIFTCHECK_PYTHON overrides it.</summary>
+    public string PythonPath =>
+        Environment.GetEnvironmentVariable("DRIFTCHECK_PYTHON") is { Length: > 0 } python ? python : "python3";
+
+    /// <summary>
     /// Carpetas donde se buscan los archivos .driftcheck.json que exporta el plugin de Figma: Descargas (donde
     /// los deja el navegador o la app de Figma) y la carpeta "exports" de la salida (donde los copia
     /// import_design). DRIFTCHECK_EXPORTS las reemplaza (varias, separadas por ';' en Windows o ':').

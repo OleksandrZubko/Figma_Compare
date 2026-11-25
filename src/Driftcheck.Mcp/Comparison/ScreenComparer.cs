@@ -36,6 +36,28 @@ public sealed partial class ScreenComparer(Settings settings)
 {
     const double TextWidthTolerance = 0.025;
 
+    /// <summary>Text sizes are rounded to whole px on the device: 0.5 sp covers it at any density.</summary>
+    const double FontSizeTolerance = 0.5;
+
+    /// <summary>Compares what Figma says with what the running app reports (text size, weight, family, radius).</summary>
+    static void CheckRuntime(DesignElement d, RuntimeProps runtime, double tolerance, Action<string, string, string> add)
+    {
+        if (d.Type == "TEXT")
+        {
+            if (runtime.Text is not { } text) return;
+            if (d.FontSize is { } size && Math.Abs(size - text.SizeSp) > FontSizeTolerance)
+                add("font size", F(size), F(text.SizeSp));
+            if (d.FontWeight is { } weight && RuntimeFonts.Weight(text) is { } appWeight && Math.Abs(weight - appWeight) >= 100)
+                add("font weight", F(weight), F(appWeight));
+            if (d.FontFamily is { } family && text.Family is { } appFamily && !RuntimeFonts.SameFamily(family, appFamily))
+                add("font family", family, appFamily);
+            return;
+        }
+
+        if (d.CornerRadius is { } radius && runtime.Box?.CornerRadius is { } appRadius && Math.Abs(radius - appRadius) > tolerance)
+            add("corner radius", F(radius), F(appRadius));
+    }
+
     /// <summary>
     /// Con más de la mitad de los píxeles distintos, la captura no es la pantalla del diseño: una pantalla de
     /// carga (el splash de .NET tapa la app aunque uiautomator ya liste sus elementos), un diálogo u otra
@@ -155,6 +177,10 @@ public sealed partial class ScreenComparer(Settings settings)
             var screenText = ElementMatcher.ScreenText(s);
             if (d.Text is not null && screenText is not null && !string.Equals(d.Text.Trim(), screenText.Trim(), StringComparison.Ordinal))
                 Add("text", d.Text, screenText);
+
+            // With the app's runtime properties (Frida) the font and the corner radius are compared as values,
+            // not guessed from the glyphs or the pixels.
+            if (s.Runtime is { } runtime) CheckRuntime(d, runtime, tolerance, Add);
 
             // El color de relleno solo se compara en formas; en un TEXT el fill es el color de la letra
             // y el muestreo del fondo daría falsos positivos.

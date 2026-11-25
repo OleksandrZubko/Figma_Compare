@@ -34,6 +34,9 @@ public static class FixSuggester
         {
             "x" => Move(fw, unit, Delta(diff), horizontal: true),
             "y" => Move(fw, unit, Delta(diff), horizontal: false),
+            "font size" => FontSize(fw, diff.Expected),
+            "font weight" => FontWeight(fw, diff.Expected),
+            "font family" => FontFamily(fw, diff.Expected),
             "width" or "height" when isText => Font(fw, d),
             "width" => Size(fw, unit, diff.Expected, width: true),
             "height" => Size(fw, unit, diff.Expected, width: false),
@@ -153,6 +156,39 @@ public static class FixSuggester
         };
         return $"The glyphs don't measure the same as in Figma; check the font{expected}. {props}";
     }
+
+    static string FontSize(UiFramework fw, string size) => fw switch
+    {
+        UiFramework.Maui => $"`FontSize=\"{size}\"`",
+        UiFramework.AndroidViews => $"`android:textSize=\"{size}sp\"`",
+        UiFramework.Compose => $"`fontSize = {size}.sp`",
+        UiFramework.UIKit => $"`font = font.withSize({size})`",
+        UiFramework.SwiftUI => $"`.font(.system(size: {size}))` (or the custom font at size {size})",
+        UiFramework.Flutter => $"`TextStyle(fontSize: {size})`",
+        _ => $"Text size of {size} sp",
+    };
+
+    static string FontWeight(UiFramework fw, string weight) => fw switch
+    {
+        UiFramework.Maui => $"Use the font file of weight {weight} in `FontFamily` (`FontAttributes` only has Bold)",
+        UiFramework.AndroidViews => $"`android:textFontWeight=\"{weight}\"`, or `android:fontFamily` pointing to the font of weight {weight}",
+        UiFramework.Compose => $"`fontWeight = FontWeight({weight})`",
+        UiFramework.UIKit => $"`UIFont.systemFont(ofSize:weight:)` or the custom font of weight {weight}",
+        UiFramework.SwiftUI => $"`.fontWeight(…)` for weight {weight}, or the custom font of that weight",
+        UiFramework.Flutter => $"`TextStyle(fontWeight: FontWeight.w{weight})`",
+        _ => $"Font weight {weight}",
+    };
+
+    static string FontFamily(UiFramework fw, string family) => fw switch
+    {
+        UiFramework.Maui => $"`FontFamily=\"{family}\"` (registered in `ConfigureFonts`)",
+        UiFramework.AndroidViews => $"`android:fontFamily=\"@font/…\"` with the {family} font",
+        UiFramework.Compose => $"`fontFamily = FontFamily(Font(R.font.…))` with the {family} font",
+        UiFramework.UIKit => $"`UIFont(name: \"{family}\", size: …)`",
+        UiFramework.SwiftUI => $"`.font(.custom(\"{family}\", size: …))`",
+        UiFramework.Flutter => $"`TextStyle(fontFamily: '{family}')`",
+        _ => $"Font family {family}",
+    };
 
     static string SetText(UiFramework fw, string expected)
     {

@@ -34,10 +34,23 @@ public sealed partial class AdbClient(Settings settings) : IDeviceClient
         await RunTextAsync(serial, ["shell", "uiautomator", "dump", "/sdcard/window_dump.xml"], ct);
         var xml = await RunTextAsync(serial, ["exec-out", "cat", "/sdcard/window_dump.xml"], ct);
 
-        var app = ParseForegroundPackage(xml) is { } package ? await GetAppInfoAsync(serial, package, ct) : null;
-        return new ScreenCapture(serial, screenshotPath, w, h, density / 160, ParseHierarchy(xml, 160.0 / density),
-            DevicePlatform.Android, app);
+        var package = ParseForegroundPackage(xml);
+        var app = package is not null ? await GetAppInfoAsync(serial, package, ct) : null;
+        var elements = ParseHierarchy(xml, 160.0 / density);
+
+        string? runtimeError = null;
+        if (package is not null)
+        {
+            var probe = await frida.RunAsync(serial, package, 160.0 / density, ct);
+            if (probe.Views is { } views) elements = FridaProbe.Attach(elements, views);
+            runtimeError = probe.Error;
+        }
+
+        return new ScreenCapture(serial, screenshotPath, w, h, density / 160, elements,
+            DevicePlatform.Android, app, runtimeError);
     }
+
+    readonly FridaProbe frida = new(settings);
 
     /// <summary>
     /// Paquete de la app en primer plano: el de los nodos del árbol de uiautomator que no son de la barra

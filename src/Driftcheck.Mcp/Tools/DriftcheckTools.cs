@@ -111,14 +111,30 @@ public sealed class DriftcheckTools(FigmaClient figma, DeviceRegistry devices, S
         sb.AppendLine($"Screenshot: {capture.ScreenshotPath}");
         sb.AppendLine($"Device: {capture.Serial}, {capture.WidthPx}×{capture.HeightPx} px, {capture.PixelsPerUnit:0.##} px per {capture.Unit} ({capture.WidthUnits:0.#} {capture.Unit} wide)");
         if (capture.App is { } app) sb.AppendLine($"App: {app}");
+        sb.AppendLine(RuntimeLine(capture));
         sb.AppendLine();
-        sb.AppendLine("| AutomationId | Class | Text | x | y | width | height |");
-        sb.AppendLine("|---|---|---|---|---|---|---|");
+        sb.AppendLine("| AutomationId | Class | Text | x | y | width | height | Font | Text color | Background | Radius | Stroke |");
+        sb.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|");
         foreach (var e in capture.Elements)
-            sb.AppendLine($"| {e.Id} | {e.ClassName.Split('.').Last()} | {Escape(e.Text ?? e.ContentDescription)} | {F(e.Bounds.X)} | {F(e.Bounds.Y)} | {F(e.Bounds.Width)} | {F(e.Bounds.Height)} |");
+        {
+            var t = e.Runtime?.Text;
+            var box = e.Runtime?.Box;
+            var font = t is null ? "" : $"{F(t.SizeSp)} sp {RuntimeFonts.Weight(t)?.ToString(CultureInfo.InvariantCulture)} {t.Family}".Trim();
+            var stroke = box?.StrokeWidth is { } sw ? $"{F(sw)} {box.StrokeColor?.Hex}".Trim() : "";
+            sb.AppendLine($"| {e.Id} | {e.ClassName.Split('.').Last()} | {Escape(e.Text ?? e.ContentDescription)} | {F(e.Bounds.X)} | {F(e.Bounds.Y)} | {F(e.Bounds.Width)} | {F(e.Bounds.Height)} " +
+                          $"| {Escape(font)} | {t?.Color?.Hex} | {box?.Background?.Hex} | {(box?.CornerRadius is { } r ? F(r) : "")} | {stroke} |");
+        }
 
         return sb.ToString();
     }
+
+    /// <summary>Whether the runtime properties (Frida) were read, so the user knows what the comparison is based on.</summary>
+    static string RuntimeLine(ScreenCapture capture) => capture switch
+    {
+        { RuntimeCount: > 0 } => $"Runtime properties (Frida): read for {capture.RuntimeCount} of {capture.Elements.Count} elements.",
+        { RuntimeError: { } error } => $"Runtime properties (Frida): not read ({error}). Fonts are judged from the screenshot only.",
+        _ => "Runtime properties (Frida): off.",
+    };
 
     [McpServerTool(Name = "compare_screen"), Description(
         "Compares the app's current screen on the device (Android or iOS Simulator) with a Figma frame. " +
@@ -155,6 +171,9 @@ public sealed class DriftcheckTools(FigmaClient figma, DeviceRegistry devices, S
         {
             List<string> warnings = [];
             if (projectPath is not null && ProjectFreshness.Check(projectPath, capture.App) is { } stale) warnings.Add(stale);
+            if (capture.Platform == DevicePlatform.Android && capture.RuntimeError is { } runtimeError)
+                warnings.Add($"Text size, weight and family weren't read from the app (Frida: {runtimeError}), only estimated " +
+                             "from the screenshot. Set DRIFTCHECK_FRIDA=off to hide this.");
 
             result = comparer.Compare(design, designPng, capture, tolerance, colorTolerance, fw, warnings);
             if (!result.LooksLikeLoadingScreen || retries == MaxCaptureAttempts - 1) break;
@@ -172,7 +191,8 @@ public sealed class DriftcheckTools(FigmaClient figma, DeviceRegistry devices, S
             1 => "(The first screenshot didn't look like the design, so Driftcheck waited and captured again.)\n\n",
             _ => $"(The first {retries} screenshots didn't look like the design, so Driftcheck waited and captured again.)\n\n",
         };
-        return retryNote + result.Report +
+        var runtimeNote = capture.RuntimeCount > 0 ? RuntimeLine(capture) + "\n\n" : "";
+        return retryNote + runtimeNote + result.Report +
                $"\n\nreport.html: {result.HtmlReportPath}\nside_by_side: {result.SideBySidePath}\ndiff: {result.DiffPath}";
     }
 
