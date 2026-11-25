@@ -106,7 +106,42 @@ public class ShapeComparisonTests : IDisposable
     public void RenderScaleIsTheExportScale(int pngWidth, double frameWidth, double expected) =>
         Assert.Equal(expected, ScreenComparer.RenderScale(pngWidth, frameWidth));
 
-    ComparisonResult Compare(Look designLook, Look? appLook = null, double lineShare = 1, UiFramework framework = UiFramework.Generic)
+    [Fact]
+    public void RuntimeIconColorWinsOverThePixels()
+    {
+        // The pixels look like the design, but the app reports another color: the value read from the app wins.
+        var result = Compare(AsDesigned, runtime: [RuntimeIcon(IconBox, new Rgb(0xFF, 0, 0))]);
+
+        var icon = Assert.Single(result.Elements, e => e.Name == "Icon");
+        Assert.Contains(icon.Diffs, d => d is { Property: "icon color", Expected: "#2B2B2B", Actual: "#FF0000" });
+    }
+
+    [Fact]
+    public void RuntimeIconWithTheDesignColorAndSizeHasNoDiffs()
+    {
+        var result = Compare(AsDesigned, runtime: [RuntimeIcon(IconBox, Ink)]);
+
+        var icon = Assert.Single(result.Elements, e => e.Name == "Icon");
+        Assert.Empty(icon.Diffs);
+    }
+
+    [Fact]
+    public void RuntimeIconBoxOfAnotherSizeIsReported()
+    {
+        // The <Svg> is 24×24 while the Figma layer is 20×20: the glyph is the same, the box around it isn't.
+        var result = Compare(AsDesigned, runtime: [RuntimeIcon(new Rect(188, 298, 24, 24), Ink)], framework: UiFramework.Compose);
+
+        var icon = Assert.Single(result.Elements, e => e.Name == "Icon");
+        var diff = Assert.Single(icon.Diffs, d => d.Property == "icon size");
+        Assert.Equal(("20×20", "24×24"), (diff.Expected, diff.Actual));
+        Assert.Contains("Modifier.size(20.dp, 20.dp)", diff.Fix);
+    }
+
+    static RuntimeView RuntimeIcon(Rect bounds, Rgb color) =>
+        new(null, bounds, new RuntimeProps("com.horcrux.svg.SvgView", 1, null, null, new RuntimeIcon([color], false)));
+
+    ComparisonResult Compare(Look designLook, Look? appLook = null, double lineShare = 1, UiFramework framework = UiFramework.Generic,
+        IReadOnlyList<RuntimeView>? runtime = null)
     {
         var app = appLook ?? designLook;
         var shapes = new List<DesignElement>
@@ -123,7 +158,7 @@ public class ShapeComparisonTests : IDisposable
         Draw(designPng, designLook);
         var screenshot = Path.Combine(_dir, "device.png");
         Draw(screenshot, app);
-        var capture = new ScreenCapture("test", screenshot, (int)app.Width, 800, 1, []);
+        var capture = new ScreenCapture("test", screenshot, (int)app.Width, 800, 1, [], RuntimeViews: runtime);
 
         return new ScreenComparer(new Settings()).Compare(design, designPng, capture, tolerance: 2, colorTolerance: 24, framework);
     }

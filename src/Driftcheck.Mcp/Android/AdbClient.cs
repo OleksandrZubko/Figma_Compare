@@ -39,15 +39,17 @@ public sealed partial class AdbClient(Settings settings) : IDeviceClient
         var elements = ParseHierarchy(xml, 160.0 / density);
 
         string? runtimeError = null;
+        IReadOnlyList<RuntimeView>? runtimeViews = null;
         if (package is not null)
         {
             var probe = await frida.RunAsync(serial, package, 160.0 / density, ct);
-            if (probe.Views is { } views) elements = FridaProbe.Attach(elements, views);
+            runtimeViews = probe.Views;
+            if (runtimeViews is not null) elements = FridaProbe.Attach(elements, runtimeViews);
             runtimeError = probe.Error;
         }
 
         return new ScreenCapture(serial, screenshotPath, w, h, density / 160, elements,
-            DevicePlatform.Android, app, runtimeError);
+            DevicePlatform.Android, app, runtimeError, runtimeViews);
     }
 
     readonly FridaProbe frida = new(settings);

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Driftcheck.Mcp.Devices;
 using Driftcheck.Mcp.Figma;
 using SkiaSharp;
 
@@ -21,7 +22,8 @@ public sealed partial class ScreenComparer
     sealed record ShapeContext(
         PixelImage Design, SKBitmap DesignBitmap, double DesignPxPerUnit,
         PixelImage Screen, SKBitmap ScreenBitmap, double PxToUnit,
-        double Scale, double Dx, double Dy, double ExtraWidth, double Tolerance, double ColorTolerance);
+        double Scale, double Dx, double Dy, double ExtraWidth, double Tolerance, double ColorTolerance,
+        IReadOnlyList<RuntimeView> RuntimeViews);
 
     /// <param name="DesignBox">Caja medida en el PNG del diseño, en unidades del frame.</param>
     /// <param name="Actual">Caja medida en la captura; null si no está.</param>
@@ -112,7 +114,20 @@ public sealed partial class ScreenComparer
                 else if (appBorder.DistanceTo(designBorder) > c.ColorTolerance) diffs.Add(("border", designBorder.Hex, appBorder.Hex));
             }
 
-            if (shape.Shape == ShapeKind.Icon && !shape.MultiColor && appSample.Fill.DistanceTo(designSample.Fill) > c.ColorTolerance)
+            // With the icon read from the app (Frida), its color and size are compared as values: the colors it
+            // paints and the box it's drawn in, which is what the Figma layer measures (not the visible strokes).
+            var runtimeIcon = shape.Shape == ShapeKind.Icon ? FindRuntimeIcon(c.RuntimeViews, actual) : null;
+            if (runtimeIcon is { Props.Icon: { } icon })
+            {
+                if (!shape.MultiColor && !icon.Gradient && shape.Fill is { } figmaColor && icon.Colors.Count > 0 &&
+                    icon.Colors.All(col => col.DistanceTo(figmaColor) > c.ColorTolerance))
+                    diffs.Add(("icon color", figmaColor.Hex, string.Join(", ", icon.Colors.Select(col => col.Hex))));
+
+                var layer = shape.Bounds.Scale(c.Scale);
+                if (Math.Abs(layer.Width - runtimeIcon.Bounds.Width) > c.Tolerance || Math.Abs(layer.Height - runtimeIcon.Bounds.Height) > c.Tolerance)
+                    diffs.Add(("icon size", $"{F(layer.Width)}×{F(layer.Height)}", $"{F(runtimeIcon.Bounds.Width)}×{F(runtimeIcon.Bounds.Height)}"));
+            }
+            else if (shape.Shape == ShapeKind.Icon && !shape.MultiColor && appSample.Fill.DistanceTo(designSample.Fill) > c.ColorTolerance)
                 diffs.Add(("icon color", designSample.Fill.Hex, appSample.Fill.Hex));
 
             // El contenido solo se compara si la caja coincide: si no, la diferencia ya está reportada y el
@@ -132,6 +147,22 @@ public sealed partial class ScreenComparer
                 checks[checks.IndexOf(k)] = k with { Label = $"{k.Label} (x={F(k.DesignBox.X)}, y={F(k.DesignBox.Y)})" };
 
         return new ShapeComparison(checks, chrome, notMeasurable);
+    }
+
+    /// <summary>
+    /// The icon view (an &lt;Svg&gt;, a tinted ImageView) that draws what was found at <paramref name="visible"/>:
+    /// the smallest one that contains its center and isn't much bigger than it (not a full-screen illustration).
+    /// </summary>
+    static RuntimeView? FindRuntimeIcon(IReadOnlyList<RuntimeView> views, Rect visible)
+    {
+        var (cx, cy) = (visible.X + visible.Width / 2, visible.Y + visible.Height / 2);
+        var area = Math.Max(visible.Width * visible.Height, 1);
+        return views
+            .Where(v => v.Props.Icon is not null &&
+                        v.Bounds.X <= cx && cx <= v.Bounds.X + v.Bounds.Width &&
+                        v.Bounds.Y <= cy && cy <= v.Bounds.Y + v.Bounds.Height &&
+                        v.Bounds.Width * v.Bounds.Height <= area * 4)
+            .MinBy(v => v.Bounds.Width * v.Bounds.Height);
     }
 
     /// <summary>Fondo de la pantalla: el color más frecuente en el PNG del diseño y en la captura.</summary>

@@ -46,6 +46,7 @@ public static class FixSuggester
             "corner radius" => CornerRadius(fw, unit, diff.Expected),
             "border" when Rgb.TryParse(diff.Expected, out var c) => Border(fw, c),
             "icon color" when Rgb.TryParse(diff.Expected, out var c) => FigmaColor(d.Fill, c, x => IconColor(fw, x)),
+            "icon size" => IconSize(fw, unit, diff.Expected),
             "image" => d.Shape == ShapeKind.Icon
                 ? "The icon doesn't look like in Figma: check that it is the same asset (export the layer's vector)"
                 : "The image doesn't look like in Figma: check that it is the same asset and how it is scaled (Aspect)",
@@ -155,6 +156,23 @@ public static class FixSuggester
             _ => "font family, size, weight and spacing",
         };
         return $"The glyphs don't measure the same as in Figma; check the font{expected}. {props}";
+    }
+
+    /// <summary>"24×24": the size of the icon's box, as the Figma layer.</summary>
+    static string IconSize(UiFramework fw, string unit, string expected)
+    {
+        var parts = expected.Split('×');
+        var (w, h) = (parts[0], parts.Length > 1 ? parts[1] : parts[0]);
+        return fw switch
+        {
+            UiFramework.Maui => $"`WidthRequest=\"{w}\"`, `HeightRequest=\"{h}\"`",
+            UiFramework.AndroidViews => $"`android:layout_width=\"{w}dp\"`, `android:layout_height=\"{h}dp\"`",
+            UiFramework.Compose => $"`Modifier.size({w}.dp, {h}.dp)`",
+            UiFramework.UIKit => $"`widthAnchor` {w}, `heightAnchor` {h}",
+            UiFramework.SwiftUI => $"`.frame(width: {w}, height: {h})`",
+            UiFramework.Flutter => $"`size: {w}` (or `SizedBox(width: {w}, height: {h})`)",
+            _ => $"Icon of {w}×{h} {unit} (in React Native, `width={{{w}}} height={{{h}}}` on the `<Svg>`)",
+        };
     }
 
     static string FontSize(UiFramework fw, string size) => fw switch

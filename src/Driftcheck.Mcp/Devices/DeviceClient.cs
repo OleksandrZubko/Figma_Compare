@@ -22,6 +22,7 @@ public sealed record AppInfo(string Id, string? Version, DateTime? DeployedAt)
 
 /// <param name="PixelsPerUnit">Píxeles de la captura por unidad lógica: densidad / 160 en Android, la escala de la pantalla (2 o 3) en iOS.</param>
 /// <param name="RuntimeError">Why the runtime properties (Frida) couldn't be read; null if they were or Frida is off.</param>
+/// <param name="RuntimeViews">Every view Frida read, including those uiautomator doesn't list (icons).</param>
 public sealed record ScreenCapture(
     string Serial,
     string ScreenshotPath,
@@ -31,7 +32,8 @@ public sealed record ScreenCapture(
     IReadOnlyList<ScreenElement> Elements,
     DevicePlatform Platform = DevicePlatform.Android,
     AppInfo? App = null,
-    string? RuntimeError = null)
+    string? RuntimeError = null,
+    IReadOnlyList<RuntimeView>? RuntimeViews = null)
 {
     /// <summary>Elements with runtime properties.</summary>
     public int RuntimeCount => Elements.Count(e => e.Runtime is not null);

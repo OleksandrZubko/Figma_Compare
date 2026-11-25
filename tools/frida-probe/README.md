@@ -6,10 +6,12 @@
 - text: size (sp), weight, font family, color, line height, letter spacing
 - background: color, corner radius, stroke width and color (`ColorDrawable`, `GradientDrawable`,
   `MaterialShapeDrawable`, `CardView`, `MaterialButton`, React Native backgrounds and borders)
+- icons: every fill and stroke color of a `react-native-svg` `<Svg>` (with group inheritance and opacity,
+  skipping `<Defs>`, clip paths and masks) and the box it's drawn in; the tint of an `ImageView`
 - effective alpha, elevation, padding
 
-`compare_screen` then compares font size, weight and family and the corner radius as values, and
-`capture_screen` lists them. Android Views and React Native; Jetpack Compose isn't supported yet.
+`compare_screen` then compares font size, weight and family, the corner radius, and the color and size of
+icons as values, and `capture_screen` lists them. Android Views and React Native; Jetpack Compose isn't supported yet.
 
 ## Setup
 

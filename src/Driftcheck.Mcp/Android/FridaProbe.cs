@@ -15,11 +15,8 @@ public sealed class FridaProbe(Settings settings)
 {
     static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
-    /// <summary>A view of the app, with its visible bounds in dp (as uiautomator reports them).</summary>
-    public sealed record View(string? ResourceId, Rect Bounds, RuntimeProps Props);
-
     /// <param name="Error">Why there are no views; null if Frida is turned off.</param>
-    public sealed record Result(IReadOnlyList<View>? Views, string? Error);
+    public sealed record Result(IReadOnlyList<RuntimeView>? Views, string? Error);
 
     public async Task<Result> RunAsync(string serial, string package, double pxToDp, CancellationToken ct = default)
     {
@@ -95,7 +92,7 @@ public sealed class FridaProbe(Settings settings)
                 fontScale = Number(metrics, "fontScale") ?? 1;
             }
 
-            var views = new List<View>();
+            var views = new List<RuntimeView>();
             foreach (var v in root.GetProperty("views").EnumerateArray())
             {
                 var b = v.GetProperty("bounds");
@@ -106,11 +103,12 @@ public sealed class FridaProbe(Settings settings)
                     ? ParseText(tv, density, fontScale) : null;
                 var box = v.TryGetProperty("background", out var bv) && bv.ValueKind == JsonValueKind.Object
                     ? ParseBox(bv, density) : null;
+                var icon = ParseIcon(v);
 
-                views.Add(new View(
+                views.Add(new RuntimeView(
                     String(v, "id"),
                     new Rect(l, t, r - l, btm - t).Scale(pxToDp),
-                    new RuntimeProps(String(v, "cls") ?? "", Number(v, "alpha") ?? 1, text, box)));
+                    new RuntimeProps(String(v, "cls") ?? "", Number(v, "alpha") ?? 1, text, box, icon)));
             }
             return new Result(views, null);
         }
@@ -142,11 +140,37 @@ public sealed class FridaProbe(Settings settings)
     }
 
     /// <summary>
+    /// An &lt;Svg&gt; of react-native-svg (all its fill and stroke colors) or an ImageView with a tint. Colors under
+    /// 25 % opacity (a faint overlay) aren't what the icon looks like.
+    /// </summary>
+    static RuntimeIcon? ParseIcon(JsonElement v)
+    {
+        if (v.TryGetProperty("svg", out var svg) && svg.ValueKind == JsonValueKind.Object && !svg.TryGetProperty("error", out _))
+        {
+            var colors = new[] { "fills", "strokes" }
+                .Where(name => svg.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array)
+                .SelectMany(name => svg.GetProperty(name).EnumerateArray())
+                .Select(c => Color(c.GetString(), minAlpha: 0x40))
+                .OfType<Rgb>()
+                .Distinct()
+                .ToList();
+            var gradient = svg.TryGetProperty("gradient", out var g) && g.ValueKind == JsonValueKind.True;
+            return colors.Count > 0 || gradient ? new RuntimeIcon(colors, gradient) : null;
+        }
+
+        if (v.TryGetProperty("image", out var image) && image.ValueKind == JsonValueKind.Object &&
+            Color(String(image, "tint")) is { } tint)
+            return new RuntimeIcon([tint], false);
+
+        return null;
+    }
+
+    /// <summary>
     /// Adds to each uiautomator element the properties of the view with the same bounds. Several views can share
     /// them (a container and its only child): the text comes from the TextView, the box from the view that draws
     /// a background.
     /// </summary>
-    public static IReadOnlyList<ScreenElement> Attach(IReadOnlyList<ScreenElement> elements, IReadOnlyList<View> views, double toleranceDp = 1.5)
+    public static IReadOnlyList<ScreenElement> Attach(IReadOnlyList<ScreenElement> elements, IReadOnlyList<RuntimeView> views, double toleranceDp = 1.5)
     {
         return elements.Select(e =>
         {
@@ -169,13 +193,13 @@ public sealed class FridaProbe(Settings settings)
         Math.Abs(a.X - b.X) <= tolerance && Math.Abs(a.Y - b.Y) <= tolerance &&
         Math.Abs(a.X + a.Width - (b.X + b.Width)) <= tolerance && Math.Abs(a.Y + a.Height - (b.Y + b.Height)) <= tolerance;
 
-    /// <summary>#AARRGGBB → color; null if it's fully transparent.</summary>
-    public static Rgb? Color(string? argb)
+    /// <summary>#AARRGGBB → color; null if its alpha is under <paramref name="minAlpha"/> (by default, fully transparent).</summary>
+    public static Rgb? Color(string? argb, uint minAlpha = 1)
     {
         if (argb is not { Length: 9 } || argb[0] != '#' ||
             !uint.TryParse(argb.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v))
             return null;
-        if (v >> 24 == 0) return null;
+        if (v >> 24 < minAlpha) return null;
         return new Rgb((byte)(v >> 16), (byte)(v >> 8), (byte)v);
     }
 

@@ -125,6 +125,23 @@ public sealed class DriftcheckTools(FigmaClient figma, DeviceRegistry devices, S
                           $"| {Escape(font)} | {t?.Color?.Hex} | {box?.Background?.Hex} | {(box?.CornerRadius is { } r ? F(r) : "")} | {stroke} |");
         }
 
+        // Icons rarely have an id or a description, so uiautomator doesn't list them; Frida does.
+        var icons = (capture.RuntimeViews ?? []).Where(v => v.Props.Icon is not null).ToList();
+        if (icons.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Icons (Frida, {capture.Unit}):");
+            sb.AppendLine();
+            sb.AppendLine("| Class | x | y | width | height | Colors |");
+            sb.AppendLine("|---|---|---|---|---|---|");
+            foreach (var v in icons)
+            {
+                var icon = v.Props.Icon!;
+                var colors = string.Join(", ", icon.Colors.Select(c => c.Hex)) + (icon.Gradient ? " + gradient" : "");
+                sb.AppendLine($"| {v.Props.ClassName.Split('.').Last()} | {F(v.Bounds.X)} | {F(v.Bounds.Y)} | {F(v.Bounds.Width)} | {F(v.Bounds.Height)} | {colors} |");
+            }
+        }
+
         return sb.ToString();
     }
 

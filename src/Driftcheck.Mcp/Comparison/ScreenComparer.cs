@@ -220,7 +220,7 @@ public sealed partial class ScreenComparer(Settings settings)
         var shapeContext = new ShapeContext(
             new PixelImage(designPixels, designPng.Width, designPng.Height), designPng, designPxPerUnit,
             new PixelImage(pixels, screenshot.Width, screenshot.Height), screenshot, pxToDp,
-            scale, dx, dy, extraWidth, tolerance, colorTolerance);
+            scale, dx, dy, extraWidth, tolerance, colorTolerance, capture.RuntimeViews ?? []);
 
         if (ScreenBackground(design, shapeContext) is var (designBackground, appBackground))
         {

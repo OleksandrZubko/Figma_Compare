@@ -7,7 +7,11 @@ namespace Driftcheck.Mcp.Devices;
 /// Sizes in logical units (dp), text size in sp.
 /// </summary>
 /// <param name="Alpha">Effective opacity: the view's alpha multiplied by its parents'.</param>
-public sealed record RuntimeProps(string ClassName, double Alpha, RuntimeText? Text, RuntimeBox? Box);
+/// <param name="Icon">Colors of a drawn icon (react-native-svg, or a tinted ImageView).</param>
+public sealed record RuntimeProps(string ClassName, double Alpha, RuntimeText? Text, RuntimeBox? Box, RuntimeIcon? Icon = null);
+
+/// <summary>A view of the app with its runtime properties and visible bounds in dp (as uiautomator reports them).</summary>
+public sealed record RuntimeView(string? ResourceId, Rect Bounds, RuntimeProps Props);
 
 /// <param name="Weight">Weight of the typeface (400, 700…); for a font whose family name carries the weight
 /// ("GeneralSansSemibold"), see <see cref="RuntimeFonts.Weight"/>.</param>
@@ -18,6 +22,10 @@ public sealed record RuntimeText(
 
 /// <summary>What the view's background draws.</summary>
 public sealed record RuntimeBox(Rgb? Background, double? CornerRadius, double? StrokeWidth, Rgb? StrokeColor);
+
+/// <summary>Colors an icon paints (fills and strokes, without the nearly transparent ones).</summary>
+/// <param name="Gradient">Some shape is painted with a gradient or pattern, which has no single color.</param>
+public sealed record RuntimeIcon(IReadOnlyList<Rgb> Colors, bool Gradient);
 
 /// <summary>Font names as the app reports them, compared with Figma's.</summary>
 public static partial class RuntimeFonts

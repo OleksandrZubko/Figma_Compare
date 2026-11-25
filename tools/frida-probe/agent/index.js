@@ -48,6 +48,11 @@ function collect() {
     RnComposite: tryUse("com.facebook.react.uimanager.drawable.CompositeBackgroundDrawable"),
     RnBackground: tryUse("com.facebook.react.uimanager.drawable.BackgroundDrawable"),
     RnBorder: tryUse("com.facebook.react.uimanager.drawable.BorderDrawable"),
+    // react-native-svg: an <Svg> is a view whose children (groups, paths) hold fill and stroke.
+    SvgView: tryUse("com.horcrux.svg.SvgView"),
+    SvgRenderable: tryUse("com.horcrux.svg.RenderableView"),
+    SvgGroup: tryUse("com.horcrux.svg.GroupView"),
+    ReadableArray: tryUse("com.facebook.react.bridge.ReadableArray"),
   };
 
   const is = (cls, obj) => cls !== null && obj !== null && cls.class.isInstance(obj);
@@ -258,6 +263,85 @@ function collect() {
     return info;
   }
 
+  // A react-native-svg brush is [type, value]: 0 = color (ARGB as a number), 1 = gradient or pattern,
+  // 2 = currentColor; null, empty or anything else draws nothing.
+  function svgBrush(array, currentColor) {
+    if (array === null) return null;
+    const a = Java.cast(array, C.ReadableArray);
+    if (a.size() === 0) return null;
+    const type = a.getDouble(0);
+    if (type === 0 && a.size() > 1) return a.getDouble(1);
+    if (type === 2) return currentColor;
+    if (type === 1) return "gradient";
+    return null;
+  }
+
+  const withOpacity = (argb, opacity) => {
+    const alpha = Math.round(((argb >>> 24) & 0xff) * opacity);
+    return ((alpha << 24) | (argb & 0xffffff)) >>> 0;
+  };
+
+  // Colors an <Svg> paints: the fill and stroke of every shape, with group inheritance and opacity applied.
+  function svgInfo(svgView) {
+    const fills = new Set(), strokes = new Set();
+    let gradient = false;
+
+    function visit(group, inheritedFill, inheritedStroke, inheritedOpacity, depth) {
+      if (depth > 30) return;
+      const g = Java.cast(group, C.ViewGroup);
+      for (let i = 0; i < g.getChildCount(); i++) {
+        const child = g.getChildAt(i);
+        // <Defs>, <ClipPath>, <Mask>, <Pattern>, <Symbol> and <Marker> hold shapes that aren't painted as such.
+        if (/(Defs|Definition|ClipPath|Mask|Pattern|Symbol|Marker)View$/.test(child.$className)) continue;
+        if (!is(C.SvgRenderable, child)) continue;
+        const r = Java.cast(child, C.SvgRenderable);
+        let opacity = inheritedOpacity;
+        try { opacity *= r.mOpacity.value; } catch (e) {}
+        let current = 0;
+        try { current = r.getCurrentColor(); } catch (e) {}
+        // A shape keeps its default (black fill, no stroke) only if no group above sets one: the props the
+        // element set itself are in mPropList, everything else is inherited (fill="none" is set to null).
+        let props = null;
+        try { props = r.mPropList.value; } catch (e) {}
+        const own = (name) => props !== null && props.contains(name);
+        // { brush, set }: set = some element in the chain set it, rather than the SVG default.
+        const resolve = (name, value, inherited) =>
+          own(name) ? { brush: svgBrush(value, current), set: true }
+            : inherited !== undefined ? inherited : { brush: svgBrush(value, current), set: false };
+        const fillRef = resolve("fill", r.fill.value, inheritedFill);
+        const strokeRef = resolve("stroke", r.stroke.value, inheritedStroke);
+
+        if (is(C.SvgGroup, child)) {
+          visit(child, fillRef, strokeRef, opacity, depth + 1);
+          continue;
+        }
+        if (opacity <= 0) continue;
+        const stroke = strokeRef.brush;
+        // The default black fill of a stroked line nobody gave a fill to covers no area: it isn't painted.
+        const fill = !fillRef.set && stroke !== null ? null : fillRef.brush;
+        if (typeof fill === "number") {
+          let fillOpacity = 1;
+          try { fillOpacity = r.fillOpacity.value; } catch (e) {}
+          if (fillOpacity > 0) fills.add(hex(withOpacity(fill, fillOpacity * opacity)));
+        } else if (fill === "gradient") gradient = true;
+        if (typeof stroke === "number") {
+          let width = 1, strokeOpacity = 1;
+          try { width = parseFloat(String(r.strokeWidth.value.value.value)); } catch (e) {}
+          try { strokeOpacity = r.strokeOpacity.value; } catch (e) {}
+          if (width > 0 && strokeOpacity > 0) strokes.add(hex(withOpacity(stroke, strokeOpacity * opacity)));
+        } else if (stroke === "gradient") gradient = true;
+      }
+    }
+
+    visit(svgView, undefined, undefined, 1, 0);
+    const info = { fills: Array.from(fills), strokes: Array.from(strokes), gradient: gradient };
+    try {
+      const s = Java.cast(svgView, C.SvgView);
+      info.viewBox = [s.mVbWidth.value, s.mVbHeight.value];
+    } catch (e) {}
+    return info;
+  }
+
   function resourceName(v, res) {
     const id = v.getId();
     if (id === -1 || id === 0) return null;
@@ -322,6 +406,12 @@ function collect() {
       const img = Java.cast(v, C.ImageView);
       entry.image = { drawable: drawableInfo(img.getDrawable(), state, 0) };
       try { entry.image.tint = stateColor(img.getImageTintList(), state); } catch (e) {}
+    }
+
+    if (is(C.SvgView, v)) {
+      try { entry.svg = svgInfo(v); } catch (e) { entry.svg = { error: String(e) }; }
+      views.push(entry);
+      return; // Its children are the drawing's shapes, already summed up in entry.svg.
     }
 
     views.push(entry);

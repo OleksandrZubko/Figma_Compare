@@ -50,6 +50,28 @@ public class FridaProbeTests
     }
 
     [Fact]
+    public void ParsesSvgIconColorsWithoutFaintOnes()
+    {
+        const string json = """
+            { "metrics": { "density": 1.75, "fontScale": 1 }, "views": [
+              { "cls": "com.horcrux.svg.SvgView", "bounds": [629, 77, 671, 119], "alpha": 1,
+                "svg": { "fills": ["#FF262B36", "#1AFFFFFF"], "strokes": ["#FF262B36", "#FFBD3D44"], "gradient": false, "viewBox": [20, 20] } },
+              { "cls": "android.widget.ImageView", "bounds": [0, 0, 42, 42], "alpha": 1,
+                "image": { "drawable": { "kind": "vector" }, "tint": "#FF9E56FF" } },
+              { "cls": "android.widget.ImageView", "bounds": [50, 0, 92, 42], "alpha": 1,
+                "image": { "drawable": { "kind": "bitmap" }, "tint": null } }
+            ] }
+            """;
+
+        var views = FridaProbe.Parse(json, PxToDp).Views!;
+
+        Assert.Equal([new Rgb(0x26, 0x2B, 0x36), new Rgb(0xBD, 0x3D, 0x44)], views[0].Props.Icon!.Colors);
+        Assert.Equal(new Rect(359.4, 44, 24, 24), Round(views[0].Bounds));
+        Assert.Equal([new Rgb(0x9E, 0x56, 0xFF)], views[1].Props.Icon!.Colors);
+        Assert.Null(views[2].Props.Icon);
+    }
+
+    [Fact]
     public void ReportsTheAgentError()
     {
         var result = FridaProbe.Parse("""{"error": "frida-server is not running on the device."}""", PxToDp);
@@ -70,7 +92,7 @@ public class FridaProbeTests
     public void AttachesTextAndBoxOfViewsWithTheSameBounds()
     {
         var bounds = new Rect(20, 100, 200, 40);
-        var views = new List<FridaProbe.View>
+        var views = new List<RuntimeView>
         {
             new(null, bounds, new RuntimeProps("ReactViewGroup", 1, null, new RuntimeBox(new Rgb(1, 2, 3), 12, null, null))),
             new(null, new Rect(20.4, 100.3, 199.8, 40.2), new RuntimeProps("ReactTextView", 1,
