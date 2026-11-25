@@ -37,6 +37,8 @@ public static class FixSuggester
             "font size" => FontSize(fw, diff.Expected),
             "font weight" => FontWeight(fw, diff.Expected),
             "font family" => FontFamily(fw, diff.Expected),
+            "line height" => LineHeight(fw, unit, diff.Expected),
+            "letter spacing" => LetterSpacing(fw, unit, diff.Expected),
             "width" or "height" when isText => Font(fw, d),
             "width" => Size(fw, unit, diff.Expected, width: true),
             "height" => Size(fw, unit, diff.Expected, width: false),
@@ -45,7 +47,17 @@ public static class FixSuggester
             "text color" when Rgb.TryParse(diff.Expected, out var c) => TextColor(fw, c),
             "corner radius" => CornerRadius(fw, unit, diff.Expected),
             "border" when Rgb.TryParse(diff.Expected, out var c) => Border(fw, c),
+            "border" => $"Set border to {diff.Expected}",
+            "border width" => BorderWidth(fw, unit, diff.Expected),
+            "shadow" => Shadow(fw, diff.Expected),
+            "opacity" => Opacity(fw, diff.Expected),
+            "padding" => Padding(fw, unit, diff.Expected),
+            "gap" => Gap(fw, unit, diff.Expected),
+            "text overflow" => "Text is truncated or clipped: allow wrapping (`maxLines`), reduce font size, or widen the container",
+            "overflow" => "Element extends past the screen edge: constrain its width or allow wrapping/scrolling",
+            "overlap" => "Element overlaps a sibling: increase spacing or allow container height to grow",
             "icon color" when Rgb.TryParse(diff.Expected, out var c) => FigmaColor(d.Fill, c, x => IconColor(fw, x)),
+            "icon color" => $"Update multicolor icon palette to {diff.Expected}",
             "icon size" => IconSize(fw, unit, diff.Expected),
             "image" => d.Shape == ShapeKind.Icon
                 ? "The icon doesn't look like in Figma: check that it is the same asset (export the layer's vector)"
@@ -285,6 +297,90 @@ public static class FixSuggester
         UiFramework.SwiftUI => $"`.foregroundStyle({SwiftUIColor(c)})`",
         UiFramework.Flutter => $"`Icon(…, color: {FlutterColor(c)})`",
         _ => $"Icon color {c.Hex}",
+    };
+
+    static string LineHeight(UiFramework fw, string unit, string lh) => fw switch
+    {
+        UiFramework.Maui => $"`LineHeight` to match {lh} {unit}",
+        UiFramework.AndroidViews => $"`app:lineHeight=\"{lh}sp\"`",
+        UiFramework.Compose => $"`lineHeight = {lh}.sp`",
+        UiFramework.UIKit => $"`NSParagraphStyle.minimumLineHeight = {lh}`",
+        UiFramework.SwiftUI => $"`.lineSpacing(…)` for line height {lh} {unit}",
+        UiFramework.Flutter => $"`TextStyle(height: …)` for line height {lh} {unit}",
+        _ => $"Line height of {lh} {unit}",
+    };
+
+    static string LetterSpacing(UiFramework fw, string unit, string ls) => fw switch
+    {
+        UiFramework.Maui => $"`CharacterSpacing=\"{ls}\"`",
+        UiFramework.AndroidViews => $"`android:letterSpacing` for {ls} {unit}",
+        UiFramework.Compose => $"`letterSpacing = {ls}.sp`",
+        UiFramework.UIKit => $"`NSAttributedString.Key.kern = {ls}`",
+        UiFramework.SwiftUI => $"`.kerning({ls})`",
+        UiFramework.Flutter => $"`TextStyle(letterSpacing: {ls})`",
+        _ => $"Letter spacing of {ls} {unit}",
+    };
+
+    static string BorderWidth(UiFramework fw, string unit, string w) => fw switch
+    {
+        UiFramework.Maui => $"`StrokeThickness=\"{w}\"`",
+        UiFramework.AndroidViews => $"`app:strokeWidth=\"{w}dp\"`",
+        UiFramework.Compose => $"`Modifier.border({w}.dp, …)`",
+        UiFramework.UIKit => $"`layer.borderWidth = {w}`",
+        UiFramework.SwiftUI => $"`.stroke(…, lineWidth: {w})`",
+        UiFramework.Flutter => $"`Border.all(width: {w})`",
+        _ => $"Border width of {w} {unit}",
+    };
+
+    static string Shadow(UiFramework fw, string expected) => expected == "none"
+        ? fw switch
+        {
+            UiFramework.AndroidViews => "Remove shadow (`android:elevation=\"0dp\"`)",
+            UiFramework.Compose => "Remove shadow (`elevation = 0.dp`)",
+            UiFramework.Maui => "Remove `Shadow`",
+            _ => "Remove shadow / elevation",
+        }
+        : fw switch
+        {
+            UiFramework.AndroidViews => "Add drop shadow (`android:elevation`)",
+            UiFramework.Compose => "Add drop shadow (`Modifier.shadow(…)`)",
+            UiFramework.Maui => "Add `Shadow`",
+            UiFramework.UIKit => "Add `layer.shadowOpacity` / `shadowRadius`",
+            UiFramework.SwiftUI => "Add `.shadow(…)`",
+            UiFramework.Flutter => "Add `BoxShadow`",
+            _ => "Add drop shadow / elevation",
+        };
+
+    static string Opacity(UiFramework fw, string opacity) => fw switch
+    {
+        UiFramework.Maui => $"`Opacity=\"{opacity}\"`",
+        UiFramework.AndroidViews => $"`android:alpha=\"{opacity}\"`",
+        UiFramework.Compose => $"`Modifier.alpha({opacity}f)`",
+        UiFramework.UIKit => $"`alpha = {opacity}`",
+        UiFramework.SwiftUI => $"`.opacity({opacity})`",
+        UiFramework.Flutter => $"`Opacity(opacity: {opacity})`",
+        _ => $"Opacity {opacity}",
+    };
+
+    static string Padding(UiFramework fw, string unit, string padding) => fw switch
+    {
+        UiFramework.Maui => $"`Padding=\"{padding}\"`",
+        UiFramework.AndroidViews => $"`android:padding` to {padding} {unit}",
+        UiFramework.Compose => $"`Modifier.padding({padding})` ({unit})",
+        UiFramework.SwiftUI => $"`.padding(…)` to {padding} {unit}",
+        UiFramework.Flutter => $"`EdgeInsets` to {padding} {unit}",
+        _ => $"Container padding {padding} {unit}",
+    };
+
+    static string Gap(UiFramework fw, string unit, string gap) => fw switch
+    {
+        UiFramework.Maui => $"`Spacing=\"{gap}\"`",
+        UiFramework.AndroidViews => $"Child spacing / margin of {gap} {unit}",
+        UiFramework.Compose => $"`Arrangement.spacedBy({gap}.dp)`",
+        UiFramework.UIKit => $"`UIStackView.spacing = {gap}`",
+        UiFramework.SwiftUI => $"`spacing: {gap}`",
+        UiFramework.Flutter => $"`SizedBox` / spacing of {gap} {unit}",
+        _ => $"Item spacing (gap) of {gap} {unit}",
     };
 
     static string FontDescription(DesignElement d)

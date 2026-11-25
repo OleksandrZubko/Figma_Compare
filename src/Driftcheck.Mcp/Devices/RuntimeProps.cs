@@ -8,7 +8,11 @@ namespace Driftcheck.Mcp.Devices;
 /// </summary>
 /// <param name="Alpha">Effective opacity: the view's alpha multiplied by its parents'.</param>
 /// <param name="Icon">Colors of a drawn icon (react-native-svg, or a tinted ImageView).</param>
-public sealed record RuntimeProps(string ClassName, double Alpha, RuntimeText? Text, RuntimeBox? Box, RuntimeIcon? Icon = null);
+/// <param name="Elevation">Android elevation in dp, which draws a shadow.</param>
+/// <param name="Shadow">Draws a shadow: elevation, or a React Native boxShadow.</param>
+/// <param name="Padding">View padding in dp (left, top, right, bottom); null when all sides are 0.</param>
+public sealed record RuntimeProps(string ClassName, double Alpha, RuntimeText? Text, RuntimeBox? Box, RuntimeIcon? Icon = null,
+    double Elevation = 0, bool Shadow = false, Insets? Padding = null);
 
 /// <summary>A view of the app with its runtime properties and visible bounds in dp (as uiautomator reports them).</summary>
 public sealed record RuntimeView(string? ResourceId, Rect Bounds, RuntimeProps Props);
@@ -16,9 +20,13 @@ public sealed record RuntimeView(string? ResourceId, Rect Bounds, RuntimeProps P
 /// <param name="Weight">Weight of the typeface (400, 700…); for a font whose family name carries the weight
 /// ("GeneralSansSemibold"), see <see cref="RuntimeFonts.Weight"/>.</param>
 /// <param name="LetterSpacingEm">Letter spacing in em, like Android's android:letterSpacing.</param>
+/// <param name="Ellipsized">True when the Android TextView Layout ellipsized at least one line.</param>
+/// <param name="Clipped">True when the rendered text overflows the TextView's content box.</param>
+/// <param name="LineCount">Number of laid-out lines in the TextView, if available.</param>
 public sealed record RuntimeText(
     string? Value, double SizeSp, double? Weight, string? Family, bool Italic, Rgb? Color,
-    double? LineHeightDp, double? LetterSpacingEm);
+    double? LineHeightDp, double? LetterSpacingEm,
+    bool Ellipsized = false, bool Clipped = false, int? LineCount = null);
 
 /// <summary>What the view's background draws.</summary>
 public sealed record RuntimeBox(Rgb? Background, double? CornerRadius, double? StrokeWidth, Rgb? StrokeColor);

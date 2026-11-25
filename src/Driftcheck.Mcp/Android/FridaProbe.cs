@@ -104,14 +104,30 @@ public sealed class FridaProbe(Settings settings)
                 var box = v.TryGetProperty("background", out var bv) && bv.ValueKind == JsonValueKind.Object
                     ? ParseBox(bv, density) : null;
                 var icon = ParseIcon(v);
+                var elevation = Number(v, "elevation") is { } e ? Math.Round(e / density, 1) : 0;
+                var boxShadow = bv.ValueKind == JsonValueKind.Object && bv.TryGetProperty("shadow", out var sh) && sh.ValueKind == JsonValueKind.True;
+                var padding = ParsePadding(v, density);
 
                 views.Add(new RuntimeView(
                     String(v, "id"),
                     new Rect(l, t, r - l, btm - t).Scale(pxToDp),
-                    new RuntimeProps(String(v, "cls") ?? "", Number(v, "alpha") ?? 1, text, box, icon)));
+                    new RuntimeProps(String(v, "cls") ?? "", Number(v, "alpha") ?? 1, text, box, icon, elevation,
+                        elevation > 0.5 || boxShadow, padding)));
             }
             return new Result(views, null);
         }
+    }
+
+    static Insets? ParsePadding(JsonElement v, double density)
+    {
+        if (!v.TryGetProperty("padding", out var p) || p.ValueKind != JsonValueKind.Array || p.GetArrayLength() < 4)
+            return null;
+        var insets = new Insets(
+            Math.Round(p[0].GetDouble() / density, 1),
+            Math.Round(p[1].GetDouble() / density, 1),
+            Math.Round(p[2].GetDouble() / density, 1),
+            Math.Round(p[3].GetDouble() / density, 1));
+        return insets.IsZero ? null : insets;
     }
 
     static RuntimeText? ParseText(JsonElement t, double density, double fontScale)
@@ -126,7 +142,10 @@ public sealed class FridaProbe(Settings settings)
             t.TryGetProperty("italic", out var i) && i.ValueKind == JsonValueKind.True,
             Color(String(t, "color")),
             Number(t, "lineHeight") is { } lh ? Math.Round(lh / density, 1) : null,
-            letterSpacing is { } ls && ls != 0 ? Math.Round(ls, 3) : null);
+            letterSpacing is { } ls && ls != 0 ? Math.Round(ls, 3) : null,
+            t.TryGetProperty("ellipsized", out var ell) && ell.ValueKind == JsonValueKind.True,
+            t.TryGetProperty("clipped", out var clp) && clp.ValueKind == JsonValueKind.True,
+            Number(t, "lineCount") is { } lc ? (int)lc : null);
     }
 
     static RuntimeBox? ParseBox(JsonElement b, double density)
@@ -183,9 +202,21 @@ public sealed class FridaProbe(Settings settings)
                            ?? withText.FirstOrDefault();
             var boxView = same.LastOrDefault(v => v.Props.Box?.Background is not null)
                           ?? same.LastOrDefault(v => v.Props.Box is not null);
+            var shadowView = same.LastOrDefault(v => v.Props.Shadow);
+            var paddingView = same.LastOrDefault(v => v.Props.Padding is not null);
             var main = textView ?? boxView ?? same[^1];
 
-            return e with { Runtime = main.Props with { Text = textView?.Props.Text, Box = boxView?.Props.Box } };
+            return e with
+            {
+                Runtime = main.Props with
+                {
+                    Text = textView?.Props.Text,
+                    Box = boxView?.Props.Box,
+                    Shadow = main.Props.Shadow || shadowView is not null,
+                    Elevation = Math.Max(main.Props.Elevation, shadowView?.Props.Elevation ?? 0),
+                    Padding = main.Props.Padding ?? paddingView?.Props.Padding,
+                }
+            };
         }).ToList();
     }
 

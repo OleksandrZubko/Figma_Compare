@@ -118,6 +118,10 @@ function collect() {
         const comp = Java.cast(d, C.RnComposite);
         const bg = comp.getBackground();
         const info = bg !== null ? rnBackgroundInfo(bg) : { kind: "rn" };
+        try {
+          const shadows = comp.getOuterShadows();
+          if (shadows !== null && shadows.size() > 0) info.shadow = true; // boxShadow
+        } catch (e) {}
         const border = comp.getBorder();
         return border !== null ? rnBorderInfo(border, info) : info;
       }
@@ -199,6 +203,26 @@ function collect() {
       gravity: t.getGravity(),
       maxLines: t.getMaxLines(),
     };
+    try {
+      const layout = t.getLayout();
+      if (layout !== null) {
+        const lineCount = layout.getLineCount();
+        info.lineCount = lineCount;
+        let ellipsized = false;
+        let maxLineW = 0;
+        for (let i = 0; i < lineCount; i++) {
+          if (layout.getEllipsisCount(i) > 0) ellipsized = true;
+          const lw = layout.getLineWidth(i);
+          if (lw > maxLineW) maxLineW = lw;
+        }
+        info.ellipsized = ellipsized;
+        const availW = t.getWidth() - t.getTotalPaddingLeft() - t.getTotalPaddingRight();
+        const availH = t.getHeight() - t.getTotalPaddingTop() - t.getTotalPaddingBottom();
+        if ((availW > 0 && maxLineW > availW + 2) || (availH > 0 && layout.getHeight() > availH + 2)) {
+          info.clipped = true;
+        }
+      }
+    } catch (e) {}
     const tf = t.getTypeface();
     if (tf !== null) {
       try { info.weight = tf.getWeight(); } catch (e) {}

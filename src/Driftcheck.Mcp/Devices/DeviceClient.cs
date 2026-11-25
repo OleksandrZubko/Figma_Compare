@@ -5,8 +5,14 @@ public enum DevicePlatform { Android, Ios }
 /// <summary>Elemento de la pantalla del dispositivo, en unidades lógicas (dp en Android, pt en iOS).</summary>
 /// <param name="Id">AutomationId: el resource-id en Android, el accessibilityIdentifier en iOS.</param>
 /// <param name="Runtime">Properties read from the running app (Frida on Android); null if they weren't read.</param>
+/// <param name="Clickable">Whether the element is interactive/clickable (used for tap target and a11y checks).</param>
+/// <param name="Focused">Whether the element currently has input focus (used for keyboard occlusion checks).</param>
+/// <param name="Focusable">Whether the element can receive accessibility/input focus.</param>
+/// <param name="Checkable">Whether the element is a toggle/checkbox/switch.</param>
+/// <param name="Enabled">Whether the element is enabled (false = disabled).</param>
 public sealed record ScreenElement(string? Id, string ClassName, string? Text, string? ContentDescription, Rect Bounds,
-    RuntimeProps? Runtime = null);
+    RuntimeProps? Runtime = null, bool Clickable = false, bool Focused = false,
+    bool Focusable = false, bool Checkable = false, bool Enabled = true);
 
 /// <summary>App que estaba en primer plano al tomar la captura.</summary>
 /// <param name="Id">Paquete en Android, bundle id en iOS.</param>
@@ -23,6 +29,8 @@ public sealed record AppInfo(string Id, string? Version, DateTime? DeployedAt)
 /// <param name="PixelsPerUnit">Píxeles de la captura por unidad lógica: densidad / 160 en Android, la escala de la pantalla (2 o 3) en iOS.</param>
 /// <param name="RuntimeError">Why the runtime properties (Frida) couldn't be read; null if they were or Frida is off.</param>
 /// <param name="RuntimeViews">Every view Frida read, including those uiautomator doesn't list (icons).</param>
+/// <param name="SafeArea">System bar insets (status bar / cutout top, gesture/nav bar bottom) in logical units, if read.</param>
+/// <param name="KeyboardHeightUnits">Visible on-screen keyboard (IME) height in logical units, if currently shown.</param>
 public sealed record ScreenCapture(
     string Serial,
     string ScreenshotPath,
@@ -33,7 +41,9 @@ public sealed record ScreenCapture(
     DevicePlatform Platform = DevicePlatform.Android,
     AppInfo? App = null,
     string? RuntimeError = null,
-    IReadOnlyList<RuntimeView>? RuntimeViews = null)
+    IReadOnlyList<RuntimeView>? RuntimeViews = null,
+    Insets? SafeArea = null,
+    double? KeyboardHeightUnits = null)
 {
     /// <summary>Elements with runtime properties.</summary>
     public int RuntimeCount => Elements.Count(e => e.Runtime is not null);
@@ -41,6 +51,7 @@ public sealed record ScreenCapture(
     /// <summary>Factor px → unidad lógica.</summary>
     public double PxToUnit => 1 / PixelsPerUnit;
     public double WidthUnits => WidthPx * PxToUnit;
+    public double HeightUnits => HeightPx * PxToUnit;
 
     /// <summary>Nombre de la unidad lógica para los reportes. Las dos equivalen a una unidad de Figma.</summary>
     public string Unit => Platform == DevicePlatform.Ios ? "pt" : "dp";
@@ -86,6 +97,13 @@ public sealed class DeviceRegistry(IEnumerable<IDeviceClient> clients)
     /// <summary>Captura el dispositivo con ese serial (o UDID), o el primero que haya si es null.</summary>
     public async Task<ScreenCapture> CaptureAsync(string? serial, CancellationToken ct = default)
     {
+        var (client, device) = await ResolveAsync(serial, ct);
+        return await client.CaptureAsync(device.Serial, ct);
+    }
+
+    /// <summary>Resolves a device serial (or the first available device) to its client and info.</summary>
+    public async Task<(IDeviceClient Client, DeviceInfo Device)> ResolveAsync(string? serial, CancellationToken ct = default)
+    {
         var listing = await ListAsync(ct);
         var found = serial is null
             ? listing.Devices.FirstOrDefault()
@@ -100,6 +118,6 @@ public sealed class DeviceRegistry(IEnumerable<IDeviceClient> clients)
             throw new InvalidOperationException(reason);
         }
 
-        return await found.Client.CaptureAsync(found.Device.Serial, ct);
+        return found;
     }
 }

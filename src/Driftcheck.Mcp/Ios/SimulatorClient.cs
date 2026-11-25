@@ -180,7 +180,8 @@ public sealed partial class SimulatorClient(Settings settings) : IDeviceClient
             }
 
             if (id is null && text is null && description is null) continue;
-            result.Add(new ScreenElement(id, type, text, description, bounds));
+            var clickable = type is "Button" or "Link" or "TextField" or "SecureTextField" or "SearchField" or "Switch" or "Toggle" or "Tab";
+            result.Add(new ScreenElement(id, type, text, description, bounds, Clickable: clickable));
         }
         return result;
     }

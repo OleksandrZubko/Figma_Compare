@@ -13,6 +13,12 @@ public enum ShapeKind { Shape, Icon, Image }
 /// <param name="WidthShare">
 /// En una fila de Auto Layout, la parte del ancho sobrante que le toca si crece (Fill): 0.5 si son dos los que crecen.
 /// </param>
+/// <param name="LineHeight">Fixed line height of a text; null when it's Auto (the font's own).</param>
+/// <param name="LetterSpacing">Letter spacing of a text, in the frame's units; null or 0 when there is none.</param>
+/// <param name="StrokeWeight">Width of the border, if it has one.</param>
+/// <param name="Shadow">Has a visible drop shadow.</param>
+/// <param name="Opacity">Effective opacity: the layer's multiplied by its parents'.</param>
+/// <param name="IconColors">Every color of an icon (one or more).</param>
 public sealed record DesignElement(
     string Name,
     string Type,
@@ -27,14 +33,36 @@ public sealed record DesignElement(
     ShapeKind? Shape = null,
     Rgb? Stroke = null,
     bool MultiColor = false,
-    double? WidthShare = null);
+    double? WidthShare = null,
+    double? LineHeight = null,
+    double? LetterSpacing = null,
+    double? StrokeWeight = null,
+    bool Shadow = false,
+    double Opacity = 1,
+    IReadOnlyList<Rgb>? IconColors = null);
+
+/// <summary>An Auto Layout container in Figma, with its padding, item spacing, and visible flow children.</summary>
+public sealed record DesignLayout(
+    string Name,
+    string? NodeId,
+    Rect Bounds,
+    bool IsHorizontal,
+    Insets Padding,
+    double ItemSpacing,
+    bool SpaceBetween,
+    IReadOnlyList<Rect> ChildBounds,
+    IReadOnlyList<string?> ChildNodeIds,
+    IReadOnlyList<IReadOnlyList<string>>? ChildDescendantIds = null,
+    bool PrimaryCenter = false,
+    bool CounterCenter = false);
 
 /// <param name="CachedAt">Fecha en que se descargó, si viene de la caché local; null si se acaba de descargar.</param>
 /// <param name="Shapes">Capas sin texto que se ven (formas, íconos, imágenes), tengan el nombre que tengan.</param>
 /// <param name="Background">Color de fondo del frame.</param>
+/// <param name="Layouts">Auto Layout containers with padding or item spacing, for spacing/gap comparison.</param>
 public sealed record DesignFrame(
     string FileKey, string NodeId, string Name, Rect Bounds, IReadOnlyList<DesignElement> Elements, DateTime? CachedAt = null,
-    IReadOnlyList<DesignElement>? Shapes = null, Rgb? Background = null);
+    IReadOnlyList<DesignElement>? Shapes = null, Rgb? Background = null, IReadOnlyList<DesignLayout>? Layouts = null);
 
 public sealed partial class FigmaClient(HttpClient http, Settings settings)
 {
@@ -100,15 +128,17 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
 
         var elements = new List<DesignElement>();
         var shapes = new List<DesignElement>();
+        var layouts = new List<DesignLayout>();
+        CollectLayouts(node, frameBounds, layout, layouts);
         if (node.TryGetProperty("children", out var children))
             foreach (var child in children.EnumerateArray())
             {
-                Collect(child, frameBounds, layout, elements);
-                CollectShapes(child, frameBounds, layout, shapes, null);
+                Collect(child, frameBounds, layout, elements, 1);
+                CollectShapes(child, frameBounds, layout, shapes, null, 1);
             }
 
         return new DesignFrame(fileKey, nodeId, node.GetProperty("name").GetString() ?? nodeId,
-            frameBounds with { X = 0, Y = 0 }, elements, cachedAt, shapes, ReadSolidFill(node));
+            frameBounds with { X = 0, Y = 0 }, elements, cachedAt, shapes, ReadSolidFill(node), layouts);
     }
 
     /// <summary>Renderiza el frame a PNG (o lo toma de la caché) y devuelve la ruta local.</summary>
@@ -180,10 +210,12 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
     static string FormatWait(TimeSpan t) =>
         t.TotalDays >= 1 ? $"{t.TotalDays:0.#} days" : t.TotalHours >= 1 ? $"{t.TotalHours:0.#} hours" : $"{Math.Ceiling(t.TotalMinutes)} minutes";
 
-    static void Collect(JsonElement node, Rect frame, Dictionary<string, Rect> layout, List<DesignElement> output)
+    static void Collect(JsonElement node, Rect frame, Dictionary<string, Rect> layout, List<DesignElement> output, double parentOpacity)
     {
         if (node.TryGetProperty("visible", out var visible) && !visible.GetBoolean())
             return;
+
+        var opacity = parentOpacity * (TryDouble(node, "opacity") ?? 1);
 
         var name = node.GetProperty("name").GetString() ?? "";
         var type = node.GetProperty("type").GetString() ?? "";
@@ -196,7 +228,7 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
         if (box is { } b && !AutoNameRegex().IsMatch(name))
         {
             string? text = null;
-            double? fontSize = null, fontWeight = null;
+            double? fontSize = null, fontWeight = null, lineHeight = null, letterSpacing = null;
             string? fontFamily = null;
 
             if (type == "TEXT")
@@ -207,6 +239,8 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
                     fontSize = TryDouble(style, "fontSize");
                     fontWeight = TryDouble(style, "fontWeight");
                     fontFamily = style.TryGetProperty("fontFamily", out var ff) ? ff.GetString() : null;
+                    lineHeight = ReadLineHeight(style);
+                    letterSpacing = TryDouble(style, "letterSpacing") is { } ls && Math.Abs(ls) > 0.01 ? ls : null;
                 }
             }
 
@@ -216,12 +250,87 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
                 ReadSolidFill(node),
                 text, fontSize, fontFamily, fontWeight,
                 TryDouble(node, "cornerRadius"),
-                NodeId(node)));
+                NodeId(node),
+                Stroke: ReadSolidStroke(node),
+                LineHeight: lineHeight,
+                LetterSpacing: letterSpacing,
+                StrokeWeight: ReadSolidStroke(node) is null ? null : TryDouble(node, "strokeWeight"),
+                Shadow: HasDropShadow(node),
+                Opacity: opacity));
         }
 
         if (node.TryGetProperty("children", out var children))
             foreach (var child in children.EnumerateArray())
-                Collect(child, frame, layout, output);
+                Collect(child, frame, layout, output, opacity);
+    }
+
+    static void CollectLayouts(JsonElement node, Rect frame, Dictionary<string, Rect> layout, List<DesignLayout> output)
+    {
+        if (!IsVisible(node)) return;
+
+        var mode = node.TryGetProperty("layoutMode", out var lm) && lm.ValueKind == JsonValueKind.String ? lm.GetString() : null;
+        var wrap = node.TryGetProperty("layoutWrap", out var lw) && lw.ValueKind == JsonValueKind.String ? lw.GetString() : null;
+        if (mode is "HORIZONTAL" or "VERTICAL" && wrap != "WRAP")
+        {
+            var box = node.TryGetProperty("id", out var id) && layout.TryGetValue(id.GetString() ?? "", out var laidOut)
+                ? laidOut
+                : ReadBox(node);
+            if (box is { } b)
+            {
+                var padding = new Insets(
+                    TryDouble(node, "paddingLeft") ?? 0,
+                    TryDouble(node, "paddingTop") ?? 0,
+                    TryDouble(node, "paddingRight") ?? 0,
+                    TryDouble(node, "paddingBottom") ?? 0);
+                var itemSpacing = TryDouble(node, "itemSpacing") ?? 0;
+                var primaryAlign = node.TryGetProperty("primaryAxisAlignItems", out var pa) && pa.ValueKind == JsonValueKind.String ? pa.GetString() : null;
+                var counterAlign = node.TryGetProperty("counterAxisAlignItems", out var ca) && ca.ValueKind == JsonValueKind.String ? ca.GetString() : null;
+                var spaceBetween = primaryAlign == "SPACE_BETWEEN";
+
+                var childBounds = new List<Rect>();
+                var childIds = new List<string?>();
+                var childDescendants = new List<IReadOnlyList<string>>();
+                if (node.TryGetProperty("children", out var flowChildren))
+                {
+                    foreach (var ch in flowChildren.EnumerateArray())
+                    {
+                        if (!IsVisible(ch)) continue;
+                        if (ch.TryGetProperty("layoutPositioning", out var pos) && pos.GetString() == "ABSOLUTE") continue;
+                        var chId = NodeId(ch);
+                        var chBox = chId is not null && layout.TryGetValue(chId, out var cLaidOut) ? cLaidOut : ReadBox(ch);
+                        if (chBox is { } cb)
+                        {
+                            childBounds.Add(cb.Offset(-frame.X, -frame.Y));
+                            childIds.Add(chId);
+                            var desc = new List<string>();
+                            CollectSubtreeIds(ch, desc);
+                            childDescendants.Add(desc);
+                        }
+                    }
+                }
+
+                if (!padding.IsZero || (!spaceBetween && itemSpacing > 0 && childBounds.Count >= 2))
+                {
+                    var name = node.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    output.Add(new DesignLayout(name, NodeId(node), b.Offset(-frame.X, -frame.Y),
+                        mode == "HORIZONTAL", padding, itemSpacing, spaceBetween, childBounds, childIds,
+                        childDescendants, primaryAlign == "CENTER", counterAlign == "CENTER"));
+                }
+            }
+        }
+
+        if (node.TryGetProperty("children", out var children))
+            foreach (var child in children.EnumerateArray())
+                CollectLayouts(child, frame, layout, output);
+    }
+
+    static void CollectSubtreeIds(JsonElement node, List<string> ids)
+    {
+        if (!IsVisible(node)) return;
+        if (NodeId(node) is { } id) ids.Add(id);
+        if (node.TryGetProperty("children", out var children))
+            foreach (var ch in children.EnumerateArray())
+                CollectSubtreeIds(ch, ids);
     }
 
     /// <summary>
@@ -229,13 +338,15 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
     /// Se toman aunque tengan nombres automáticos ("Frame", "Vector"): se comparan por cómo se ven en el PNG,
     /// no por nombre. Un ícono hecho de varios vectores se toma entero.
     /// </summary>
-    static void CollectShapes(JsonElement node, Rect frame, Dictionary<string, Rect> layout, List<DesignElement> output, double? widthShare)
+    static void CollectShapes(JsonElement node, Rect frame, Dictionary<string, Rect> layout, List<DesignElement> output, double? widthShare,
+        double parentOpacity)
     {
         const double MaxIconSize = 64;
         const double MinArea = 24;
 
         var type = node.GetProperty("type").GetString() ?? "";
         if (!IsVisible(node) || type == "TEXT") return;
+        var opacity = parentOpacity * (TryDouble(node, "opacity") ?? 1);
 
         var name = node.GetProperty("name").GetString() ?? "";
         var box = node.TryGetProperty("id", out var id) && layout.TryGetValue(id.GetString() ?? "", out var laidOut)
@@ -249,7 +360,7 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
             if (b.Width <= MaxIconSize && b.Height <= MaxIconSize && IconColors(node) is { } colors)
             {
                 output.Add(new DesignElement(name, type, bounds, colors.Count == 1 ? colors[0] : null, null, null, null, null, null,
-                    NodeId(node), ShapeKind.Icon, MultiColor: colors.Count > 1, WidthShare: widthShare));
+                    NodeId(node), ShapeKind.Icon, MultiColor: colors.Count > 1, WidthShare: widthShare, Opacity: opacity, IconColors: colors));
                 return;
             }
 
@@ -258,7 +369,8 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
             var stroke = ReadSolidStroke(node);
             if (image || fill is not null || stroke is not null)
                 output.Add(new DesignElement(name, type, bounds, fill, null, null, null, null, TryDouble(node, "cornerRadius"),
-                    NodeId(node), image ? ShapeKind.Image : ShapeKind.Shape, stroke, WidthShare: widthShare));
+                    NodeId(node), image ? ShapeKind.Image : ShapeKind.Shape, stroke, WidthShare: widthShare,
+                    StrokeWeight: stroke is null ? null : TryDouble(node, "strokeWeight"), Shadow: HasDropShadow(node), Opacity: opacity));
         }
 
         if (!node.TryGetProperty("children", out var children)) return;
@@ -267,7 +379,7 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
         var row = node.TryGetProperty("layoutMode", out var mode) && mode.GetString() == "HORIZONTAL";
         var growTotal = row ? children.EnumerateArray().Where(IsVisible).Sum(Grow) : 0;
         foreach (var child in children.EnumerateArray())
-            CollectShapes(child, frame, layout, output, growTotal > 0 && Grow(child) > 0 ? Grow(child) / growTotal : null);
+            CollectShapes(child, frame, layout, output, growTotal > 0 && Grow(child) > 0 ? Grow(child) / growTotal : null, opacity);
     }
 
     static double Grow(JsonElement node)
@@ -355,6 +467,17 @@ public sealed partial class FigmaClient(HttpClient http, Settings settings)
 
         return null;
     }
+
+    /// <summary>A fixed line height (lineHeightPx); null if it's Auto ("INTRINSIC_%"), which is the font's own.</summary>
+    static double? ReadLineHeight(JsonElement style) =>
+        style.TryGetProperty("lineHeightUnit", out var unit) && unit.GetString() == "INTRINSIC_%"
+            ? null
+            : TryDouble(style, "lineHeightPx");
+
+    static bool HasDropShadow(JsonElement node) =>
+        node.TryGetProperty("effects", out var effects) && effects.ValueKind == JsonValueKind.Array &&
+        effects.EnumerateArray().Any(e => (!e.TryGetProperty("visible", out var v) || v.GetBoolean()) &&
+                                          e.TryGetProperty("type", out var t) && t.GetString() == "DROP_SHADOW");
 
     static bool HasImageFill(JsonElement node) =>
         node.TryGetProperty("fills", out var fills) && fills.ValueKind == JsonValueKind.Array &&

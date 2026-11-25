@@ -9,6 +9,14 @@ public readonly record struct Rect(double X, double Y, double Width, double Heig
     public override string ToString() => $"x={X:0.#} y={Y:0.#} w={Width:0.#} h={Height:0.#}";
 }
 
+/// <summary>Padding / margins on the four sides, in logical units (dp / pt).</summary>
+public readonly record struct Insets(double Left, double Top, double Right, double Bottom)
+{
+    public bool IsZero => Left == 0 && Top == 0 && Right == 0 && Bottom == 0;
+    public Insets Scale(double s) => new(Left * s, Top * s, Right * s, Bottom * s);
+    public override string ToString() => $"{Left:0.#}, {Top:0.#}, {Right:0.#}, {Bottom:0.#}";
+}
+
 public readonly record struct Rgb(byte R, byte G, byte B)
 {
     public string Hex => $"#{R:X2}{G:X2}{B:X2}";
