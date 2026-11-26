@@ -1,3 +1,5 @@
+using Driftcheck.Mcp;
+using Driftcheck.Mcp.Devices;
 using Driftcheck.Mcp.Qa;
 
 namespace Driftcheck.Tests;
@@ -88,5 +90,54 @@ public class ResilienceRunnerTests
         Assert.Equal(ResilienceRunner.AllScenarios, ResilienceRunner.NormalizeScenarios([]));
         Assert.Equal(ResilienceRunner.AllScenarios, ResilienceRunner.NormalizeScenarios(["ALL"]));
         Assert.Equal(["back", "rotation"], ResilienceRunner.NormalizeScenarios([" Back", "rotation", "back"]));
+    }
+
+    static ScreenCapture Screen(params string[] texts) =>
+        new("test", "unused.png", 400, 800, 1,
+            texts.Select((t, i) => new ScreenElement(null, "android.widget.TextView", t, null, new Rect(0, i * 40, 300, 30))).ToList());
+
+    [Theory]
+    [InlineData("No internet connection", true)]
+    [InlineData("Couldn't load your rewards. Try again", true)]
+    [InlineData("Немає з'єднання з інтернетом", true)]
+    [InlineData("You're offline", true)]
+    [InlineData("My rewards", false)]
+    [InlineData("Connected accounts", false)]
+    public void RecognizesOfflineMessages(string text, bool offline) =>
+        Assert.Equal(offline, ResilienceRunner.HasOfflineMessage(Screen(text)));
+
+    [Fact]
+    public void RecognizesASignInScreen()
+    {
+        Assert.True(ResilienceRunner.LooksLikeLogin(Screen("Welcome back", "Email", "Password", "Log in")));
+        Assert.True(ResilienceRunner.LooksLikeLogin(Screen("Увійти", "Пароль")));
+        Assert.False(ResilienceRunner.LooksLikeLogin(Screen("My rewards", "Account", "Log in to Shopify partner"))); // One word isn't a login screen.
+    }
+
+    [Fact]
+    public void RecognizesABlankScreen()
+    {
+        Assert.True(ResilienceRunner.IsBlank(Png(400, 800, drawContent: false)));
+        Assert.False(ResilienceRunner.IsBlank(Png(400, 800, drawContent: true)));
+    }
+
+    [Fact]
+    public void OfflineIsAnAliasOfOfflineAction() =>
+        Assert.Equal(["offline-action", "rotation"], ResilienceRunner.NormalizeScenarios(["offline", "rotation"]));
+
+    static byte[] Png(int w, int h, bool drawContent)
+    {
+        using var bitmap = new SkiaSharp.SKBitmap(w, h);
+        using (var canvas = new SkiaSharp.SKCanvas(bitmap))
+        {
+            canvas.Clear(SkiaSharp.SKColors.White);
+            if (drawContent)
+            {
+                using var paint = new SkiaSharp.SKPaint { Color = new SkiaSharp.SKColor(0x26, 0x2B, 0x36) };
+                for (var i = 0; i < 12; i++) canvas.DrawRect(20, 80 + i * 55, 360, 30, paint);
+            }
+        }
+        using var data = bitmap.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
     }
 }

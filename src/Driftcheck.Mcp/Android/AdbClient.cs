@@ -300,6 +300,10 @@ public sealed partial class AdbClient(Settings settings) : IDeviceClient
             y1.ToString(CultureInfo.InvariantCulture), x2.ToString(CultureInfo.InvariantCulture),
             y2.ToString(CultureInfo.InvariantCulture), durationMs.ToString(CultureInfo.InvariantCulture)], ct);
 
+    /// <summary>A screenshot as PNG bytes, without the UI dump and Frida probe of <see cref="CaptureAsync"/>.</summary>
+    public Task<byte[]> ScreencapAsync(string serial, CancellationToken ct = default) =>
+        RunBytesAsync(serial, ["exec-out", "screencap", "-p"], ct);
+
     public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) =>
         RunTextAsync(serial, ["shell", "input", "tap", x.ToString(CultureInfo.InvariantCulture), y.ToString(CultureInfo.InvariantCulture)], ct);
 

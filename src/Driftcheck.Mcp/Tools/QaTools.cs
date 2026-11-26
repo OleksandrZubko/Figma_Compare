@@ -180,13 +180,17 @@ public sealed class QaTools(FigmaClient figma, DeviceRegistry devices, Settings 
     }
 
     [McpServerTool(Name = "test_resilience"), Description(
-        "Puts the app on an Android device through adverse conditions and checks it copes: offline, slow-network (emulator), rotation, " +
-        "process-death (killed in the background and restored), permissions (runtime permissions revoked), back, notification and " +
-        "incoming-call (emulator). Captures the screen before and after each, reads logcat for crashes, and restores every setting afterwards.")]
+        "Puts the app on an Android device through adverse conditions and checks it copes: offline-launch (killed, network off, " +
+        "relaunched: no crash, blank screen, endless loader or forced sign-out), offline-action (network cut on the open screen, then a " +
+        "pull-to-refresh or the given actions: an error must be shown), network-recovery (network off then on: the app must recover by " +
+        "itself), slow-network (emulator), rotation, process-death (killed in the background and restored), permissions (runtime " +
+        "permissions revoked), back, notification and incoming-call (emulator). Captures the screen before and after each, reads logcat " +
+        "for crashes, and restores every setting afterwards.")]
     public async Task<string> TestResilience(
-        [Description("Comma-separated scenarios, or \"all\": offline, slow-network, rotation, process-death, permissions, back, notification, incoming-call. Default all.")] string? scenarios = null,
+        [Description("Comma-separated scenarios, or \"all\": offline-launch, offline-action, network-recovery, slow-network, rotation, process-death, permissions, back, notification, incoming-call. Default all.")] string? scenarios = null,
         [Description("App package. Optional: the app in the foreground.")] string? package = null,
         [Description("Device serial. Optional.")] string? deviceSerial = null,
+        [Description("Optional JSON array of ADB actions for offline-action, run once the network is cut (e.g. tap the button that loads data): [{\"type\":\"tap_text\",\"value\":\"Shop\"}]. Default: a pull-to-refresh.")] string? offlineActionsJson = null,
         CancellationToken ct = default)
     {
         var (adb, serial) = await AndroidAsync(deviceSerial, ct);
@@ -194,7 +198,8 @@ public sealed class QaTools(FigmaClient figma, DeviceRegistry devices, Settings 
         var list = string.IsNullOrWhiteSpace(scenarios) || scenarios.Trim().Equals("all", StringComparison.OrdinalIgnoreCase)
             ? []
             : scenarios.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var results = await new ResilienceRunner(adb, settings).RunAsync(serial, package, list, ct);
+        var runner = new ResilienceRunner(adb, settings) { OfflineActions = ParseActions(offlineActionsJson) };
+        var results = await runner.RunAsync(serial, package, list, ct);
 
         var sb = new StringBuilder();
         sb.AppendLine("| Scenario | Result | Issues | Before | After | Notes |");

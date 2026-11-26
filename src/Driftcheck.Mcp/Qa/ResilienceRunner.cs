@@ -17,7 +17,20 @@ public sealed record ResilienceResult(
 public sealed partial class ResilienceRunner(AdbClient adb, Settings settings)
 {
     public static IReadOnlyList<string> AllScenarios { get; } =
-        ["offline", "slow-network", "rotation", "process-death", "permissions", "back", "notification", "incoming-call"];
+    [
+        // network-recovery first: it needs a healthy screen to start from, and the other two can leave an error state.
+        "network-recovery", "offline-launch", "offline-action", "slow-network", "rotation", "process-death",
+        "permissions", "back", "notification", "incoming-call",
+    ];
+
+    /// <summary>Old names still accepted: "offline" was the network cut on an open screen.</summary>
+    static readonly Dictionary<string, string> Aliases = new() { ["offline"] = "offline-action" };
+
+    /// <summary>
+    /// What offline-action does once the network is cut (tap the button that loads data, open a tab…). Without it,
+    /// a pull-to-refresh on the current screen.
+    /// </summary>
+    public IReadOnlyList<DeviceAction>? OfflineActions { get; init; }
 
     const string Category = "resilience";
     static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(2500);
@@ -126,7 +139,9 @@ public sealed partial class ResilienceRunner(AdbClient adb, Settings settings)
 
     Task ExecuteAsync(Run run, CancellationToken ct) => run.Name switch
     {
-        "offline" => OfflineAsync(run, ct),
+        "offline-launch" => OfflineLaunchAsync(run, ct),
+        "offline-action" => OfflineActionAsync(run, ct),
+        "network-recovery" => NetworkRecoveryAsync(run, ct),
         "slow-network" => SlowNetworkAsync(run, ct),
         "rotation" => RotationAsync(run, ct),
         "process-death" => ProcessDeathAsync(run, ct),
@@ -139,23 +154,126 @@ public sealed partial class ResilienceRunner(AdbClient adb, Settings settings)
 
     // --- scenarios ---------------------------------------------------------------------------------------------
 
-    async Task OfflineAsync(Run run, CancellationToken ct)
+    /// <summary>
+    /// The app started from scratch with no network: it must not crash, must not sit on a blank screen or an
+    /// endless loader, must not log the user out, and should show cached data or a clear offline state.
+    /// </summary>
+    async Task OfflineLaunchAsync(Run run, CancellationToken ct)
     {
-        var wasWifi = ParseSettingInt(await adb.ShellAsync(run.Serial, "settings get global wifi_on", ct));
-        var wasData = ParseSettingInt(await adb.ShellAsync(run.Serial, "settings get global mobile_data", ct));
+        await adb.ShellAsync(run.Serial, $"am force-stop {AdbClient.ShellQuote(run.Package)}", ct);
+        var network = await NetworkOffAsync(run.Serial, ct);
+        byte[] at3s;
         try
         {
-            await adb.ShellAsync(run.Serial, "svc wifi disable", ct);
-            await adb.ShellAsync(run.Serial, "svc data disable", ct);
-            await Task.Delay(Settle, ct);
+            await LaunchAsync(run.Serial, run.Package, 3000, ct);
+            at3s = await SaveScreenshotAsync(run, "after-3s", ct);
+            await Task.Delay(5000, ct);
             await CaptureAfterAsync(run, ct);
         }
         finally
         {
-            if (wasWifi is not 0) await SafeAsync(() => adb.ShellAsync(run.Serial, "svc wifi enable", CancellationToken.None));
-            if (wasData is not 0) await SafeAsync(() => adb.ShellAsync(run.Serial, "svc data enable", CancellationToken.None));
+            await network.RestoreAsync();
         }
-        EvaluateOfflineLike(run, "offline");
+
+        var after = run.After!;
+        var afterBytes = run.AfterBytes!;
+        AddVisibleTexts(run, "Screen after an offline launch");
+
+        if (IsBlank(afterBytes))
+            run.Issues.Add(new QaIssue(Category, QaSeverity.Error, "Blank screen after an offline launch",
+                "8 s after launch the screen is a single color: nothing was rendered.",
+                Fix: "Render cached content or an offline/error state instead of waiting for the network."));
+        else if (!AdbClient.ScreenshotsMatch(at3s, afterBytes) && !HasOfflineMessage(after))
+            run.Issues.Add(new QaIssue(Category, QaSeverity.Warning, "Still loading 8 s after an offline launch",
+                "The screen kept changing between 3 s and 8 s and shows no offline message: an endless loader.",
+                Fix: "Time out the request and show an offline/error state with a retry."));
+
+        if (LooksLikeLogin(after) && !LooksLikeLogin(run.Before))
+            run.Issues.Add(new QaIssue(Category, QaSeverity.Error, "Logged out by an offline launch",
+                "The app showed a sign-in screen; it was signed in before.",
+                Fix: "Don't sign the user out when the token refresh fails for lack of network; retry when it comes back."));
+
+        AddContentIssues(run, after);
+    }
+
+    /// <summary>
+    /// The network drops while the app is open, then the user acts (pull-to-refresh or the given actions): the app
+    /// must tell them something went wrong, not stay silent or crash.
+    /// </summary>
+    async Task OfflineActionAsync(Run run, CancellationToken ct)
+    {
+        var network = await NetworkOffAsync(run.Serial, ct);
+        try
+        {
+            if (OfflineActions is { Count: > 0 } actions)
+                await DeviceActionExecutor.ExecuteAsync(adb, run.Serial, actions, ct);
+            else
+                await PullToRefreshAsync(run.Serial, ct);
+            await Task.Delay(3000, ct);
+            await CaptureAfterAsync(run, ct);
+        }
+        finally
+        {
+            await network.RestoreAsync();
+        }
+
+        AddVisibleTexts(run, "Screen after acting offline");
+        if (HasOfflineMessage(run.After!))
+            run.Notes.Add("An offline/error message is shown.");
+        else if (AdbClient.ScreenshotsMatch(run.BeforeBytes, run.AfterBytes!))
+            run.Issues.Add(new QaIssue(Category, QaSeverity.Warning, "No feedback when acting offline",
+                (OfflineActions is { Count: > 0 } ? "The actions" : "A pull-to-refresh") + " without network left the screen unchanged.",
+                Fix: "Show an offline banner, a toast or an error state with a retry. (A toast isn't in the view tree: check the after screenshot.)"));
+        else
+            run.Notes.Add("The screen changed but no offline/error text was found; check the after screenshot.");
+        AddContentIssues(run, run.After!);
+    }
+
+    /// <summary>
+    /// Network off for a while, then back on: without any action from the user, the app should drop its offline
+    /// state and show the same content as before.
+    /// </summary>
+    async Task NetworkRecoveryAsync(Run run, CancellationToken ct)
+    {
+        // Already showing an error with the network on: an earlier failure the app never recovered from.
+        if (HasOfflineMessage(run.Before))
+        {
+            await CaptureAfterAsync(run, ct);
+            run.Issues.Add(new QaIssue(Category, QaSeverity.Error, "Doesn't recover by itself",
+                "The screen already showed an offline/error message with the network on: an earlier failure was never retried.",
+                Fix: "Listen for connectivity changes and retry, or hide the offline state when a request succeeds."));
+            return;
+        }
+
+        var network = await NetworkOffAsync(run.Serial, ct);
+        ScreenCapture offline;
+        try
+        {
+            await Task.Delay(4000, ct);
+            await SaveScreenshotAsync(run, "offline", ct);
+            offline = await adb.CaptureAsync(run.Serial, ct);
+        }
+        finally
+        {
+            await network.RestoreAsync();
+        }
+
+        await Task.Delay(8000, ct); // Reconnecting, then the app's retry.
+        await CaptureAfterAsync(run, ct);
+        var after = run.After!;
+
+        if (HasOfflineMessage(after))
+            run.Issues.Add(new QaIssue(Category, QaSeverity.Error, "Still offline after the network came back",
+                "8 s after reconnecting the offline/error message is still on screen.",
+                Fix: "Listen for connectivity changes and retry, or hide the offline state when a request succeeds."));
+
+        var missing = MissingTexts(VisibleTexts(run.Before), VisibleTexts(after));
+        if (TextOverlap(VisibleTexts(run.Before), VisibleTexts(after)) < 0.5 && after.App?.Id == run.Package)
+            run.Issues.Add(new QaIssue(Category, QaSeverity.Warning, "Content didn't come back after reconnecting",
+                "Missing compared to before going offline: " + Join(missing),
+                Fix: "Reload the data when the connection is restored."));
+
+        if (HasOfflineMessage(offline)) run.Notes.Add("While offline the app showed an offline/error message.");
     }
 
     async Task SlowNetworkAsync(Run run, CancellationToken ct)
@@ -358,6 +476,93 @@ public sealed partial class ResilienceRunner(AdbClient adb, Settings settings)
         run.AfterBytes = await File.ReadAllBytesAsync(path, ct);
     }
 
+    /// <summary>Turns Wi-Fi and mobile data off; RestoreAsync turns back on what was on.</summary>
+    async Task<NetworkState> NetworkOffAsync(string serial, CancellationToken ct)
+    {
+        var wasWifi = ParseSettingInt(await adb.ShellAsync(serial, "settings get global wifi_on", ct));
+        var wasData = ParseSettingInt(await adb.ShellAsync(serial, "settings get global mobile_data", ct));
+        var state = new NetworkState(adb, serial, wasWifi is not 0, wasData is not 0);
+        try
+        {
+            await adb.ShellAsync(serial, "svc wifi disable", ct);
+            await adb.ShellAsync(serial, "svc data disable", ct);
+            await Task.Delay(1500, ct); // Let connectivity notice before the app is used.
+        }
+        catch
+        {
+            await state.RestoreAsync();
+            throw;
+        }
+        return state;
+    }
+
+    sealed class NetworkState(AdbClient adb, string serial, bool wifi, bool data)
+    {
+        public async Task RestoreAsync()
+        {
+            if (wifi) await SafeAsync(() => adb.ShellAsync(serial, "svc wifi enable", CancellationToken.None));
+            if (data) await SafeAsync(() => adb.ShellAsync(serial, "svc data enable", CancellationToken.None));
+        }
+    }
+
+    async Task PullToRefreshAsync(string serial, CancellationToken ct)
+    {
+        var size = await adb.ShellAsync(serial, "wm size", ct);
+        var m = Regex.Matches(size, @"(\d+)x(\d+)");
+        var (w, h) = m.Count > 0 ? (int.Parse(m[^1].Groups[1].Value, CultureInfo.InvariantCulture), int.Parse(m[^1].Groups[2].Value, CultureInfo.InvariantCulture)) : (1080, 2400);
+        await adb.SwipeAsync(serial, w / 2, (int)(h * 0.3), w / 2, (int)(h * 0.75), 500, ct);
+    }
+
+    async Task<byte[]> SaveScreenshotAsync(Run run, string suffix, CancellationToken ct)
+    {
+        var bytes = await adb.ScreencapAsync(run.Serial, ct);
+        await File.WriteAllBytesAsync(Path.Combine(run.Dir, $"{run.Name}-{suffix}.png"), bytes, ct);
+        return bytes;
+    }
+
+    void AddVisibleTexts(Run run, string title)
+    {
+        var texts = VisibleTexts(run.After!).Distinct().ToList();
+        run.Issues.Add(new QaIssue(Category, QaSeverity.Info, title, texts.Count == 0 ? "No visible texts." : "Visible texts: " + Join(texts)));
+    }
+
+    /// <summary>Leaked placeholders and raw translation keys on the offline screen (error states are where they hide).</summary>
+    static void AddContentIssues(Run run, ScreenCapture capture)
+    {
+        foreach (var issue in ContentAuditor.Audit(capture).Where(i => i.Category is "placeholder" or "i18n-key"))
+            run.Issues.Add(issue with { Category = $"{Category}/{issue.Category}" });
+    }
+
+    /// <summary>A visible text that says the network or the request failed (English and Ukrainian/Russian).</summary>
+    public static bool HasOfflineMessage(ScreenCapture capture) =>
+        VisibleTexts(capture).Any(t => OfflineTextRegex().IsMatch(t));
+
+    /// <summary>The screen asks to sign in: a password field, or sign-in words on a button or title.</summary>
+    public static bool LooksLikeLogin(ScreenCapture capture) =>
+        VisibleTexts(capture).Count(t => LoginTextRegex().IsMatch(t)) >= 2;
+
+    /// <summary>
+    /// A screen of one color (a blank or splash-colored screen): over 97 % of the sampled pixels, status and
+    /// navigation bars left out, are the same color.
+    /// </summary>
+    public static bool IsBlank(byte[] png)
+    {
+        using var bitmap = SkiaSharp.SKBitmap.Decode(png);
+        if (bitmap is null) return false;
+        var counts = new Dictionary<uint, int>();
+        var total = 0;
+        int top = (int)(bitmap.Height * 0.06), bottom = (int)(bitmap.Height * 0.92);
+        for (var y = top; y < bottom; y += 8)
+        for (var x = 0; x < bitmap.Width; x += 8)
+        {
+            var c = bitmap.GetPixel(x, y);
+            var key = (uint)((c.Red >> 3) << 10 | (c.Green >> 3) << 5 | (c.Blue >> 3));
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+            total++;
+        }
+        return total > 0 && counts.Values.Max() > total * 0.97;
+    }
+
     void EvaluateOfflineLike(Run run, string label)
     {
         if (run.After is null || run.AfterBytes is null) return;
@@ -419,6 +624,7 @@ public sealed partial class ResilienceRunner(AdbClient adb, Settings settings)
         if (scenarios is null || scenarios.Count == 0) return AllScenarios;
         var names = scenarios.Select(s => s.Trim().ToLowerInvariant()).Where(s => s.Length > 0).Distinct().ToList();
         if (names.Contains("all")) return AllScenarios;
+        names = names.Select(n => Aliases.GetValueOrDefault(n, n)).Distinct().ToList();
         foreach (var n in names)
             if (!AllScenarios.Contains(n)) throw new ArgumentException(UnknownScenarioMessage(n));
         return names;
@@ -499,6 +705,12 @@ public sealed partial class ResilienceRunner(AdbClient adb, Settings settings)
         ? permission["android.permission.".Length..] : permission;
 
     // "        android.permission.CAMERA: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED]"
+    [GeneratedRegex(@"(?i)\b(offline|no (internet|connection|network)|network (error|request failed|unavailable)|connection (lost|failed|error)|check your (internet|connection)|couldn.?t (connect|load)|failed to (load|connect)|try again)\b|немає (інтернет|з.єднан|мереж)|нет (интернет|соединени|сети)|помилка (мережі|з.єднання)|спробуйте ще|офлайн")]
+    private static partial Regex OfflineTextRegex();
+
+    [GeneratedRegex(@"(?i)\b(log ?in|sign ?in|sign ?up|password|forgot|create account)\b|увійти|вхід|пароль|зареєструватися|войти|вход")]
+    private static partial Regex LoginTextRegex();
+
     [GeneratedRegex(@"^\s+([\w.]+): granted=(true|false)")]
     private static partial Regex PermissionRegex();
 
