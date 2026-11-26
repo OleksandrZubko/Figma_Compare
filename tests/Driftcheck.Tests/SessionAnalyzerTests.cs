@@ -113,6 +113,19 @@ public class SessionAnalyzerTests
         Assert.Equal((decimal)expected, SessionAnalyzer.ParseScreenNumber(text));
 
     [Fact]
+    public void GroupsErrorsThatDifferOnlyInNumbers()
+    {
+        const string log = """
+              1795688400.100  4321  4321 W co.gifted.app: Invalid resource ID 0x0000001a.
+              1795688400.200  4321  4321 W co.gifted.app: Invalid resource ID 0x0000002b.
+              1795688400.300  4321  4321 E co.gifted.app: Invalid resource ID 0x0000003c.
+              1795688400.400  4321  4321 E co.gifted.app: Invalid resource ID 0x0000004d.
+            """;
+        var finding = Assert.Single(LogcatMonitor.Analyze(LogcatMonitor.Parse(log), "co.gifted.app", [4321]));
+        Assert.Equal(2, finding.Count);
+    }
+
+    [Fact]
     public void JoinsAMessageLoggedOverSeveralLines()
     {
         const string log = """

@@ -323,4 +323,18 @@ public class DesignTokenAuditorTests
         Assert.Contains("16, 24", text);
         Assert.Contains("Inter", text);
     }
+
+    [Fact]
+    public void MulticolorArtworkIsNotCheckedAgainstTokens()
+    {
+        var palette = new DesignPalette([new Rgb(0x26, 0x2B, 0x36)], [], [], [], [], []);
+        var flag = new RuntimeView(null, new Rect(300, 40, 38, 38), new RuntimeProps("com.horcrux.svg.SvgView", 1, null, null,
+            new RuntimeIcon([new Rgb(0xBD, 0x3D, 0x44), new Rgb(0x19, 0x2F, 0x5D), new Rgb(255, 255, 255)], false)));
+        var tinted = new RuntimeView(null, new Rect(20, 40, 24, 24), new RuntimeProps("com.horcrux.svg.SvgView", 1, null, null,
+            new RuntimeIcon([new Rgb(0xE6, 0x1E, 0x4E)], false)));
+        var capture = new ScreenCapture("test", "unused.png", 400, 800, 1, [], RuntimeViews: [flag, tinted]);
+
+        var issue = Assert.Single(DesignTokenAuditor.Audit(capture, palette));
+        Assert.Contains("#E61E4E", issue.Title);
+    }
 }

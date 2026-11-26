@@ -315,7 +315,8 @@ public static class DesignTokenAuditor
                 if (checkRadii && box.CornerRadius is > 0 and var r) Number(radiusBuckets, r, palette.Radii, usage);
             }
 
-            if (p.Icon is { } icon)
+            // A drawing in 3+ colors (a flag, an illustration, a brand logo) is artwork, not UI tinted with tokens.
+            if (p.Icon is { Colors.Count: <= 2 } icon)
                 foreach (var c in icon.Colors) Color(c, usage);
 
             if (p.Padding is { } pad)

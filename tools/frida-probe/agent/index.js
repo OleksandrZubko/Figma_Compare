@@ -368,7 +368,9 @@ function collect() {
 
   function resourceName(v, res) {
     const id = v.getId();
-    if (id === -1 || id === 0) return null;
+    // A resource id is 0xPPTTEEEE with a package byte; ids from View.generateViewId (React Native's tags) are
+    // small numbers, and asking their name makes the app log "Invalid resource ID" for every view.
+    if (id === -1 || id === 0 || (id >>> 24) === 0) return null;
     try {
       return res.getResourceName(id);
     } catch (e) {

@@ -98,9 +98,10 @@ public sealed partial class LogcatMonitor
                 ? e.Level is 'E' or 'F' ? "js-error" : e.Level == 'W' ? "js-warning" : null
                 : e.Level is 'E' or 'F' ? "error" : null))
             .Where(x => x.Kind is not null)
-            .GroupBy(x => (x.Kind, x.Entry.Tag, First: Summary(x.Entry.Message)));
+            // Messages that differ only in numbers ("Invalid resource ID 0x1a", "…0x2b") are the same problem.
+            .GroupBy(x => (x.Kind, x.Entry.Tag, Shape: NumbersRegex().Replace(Summary(x.Entry.Message), "#")));
         foreach (var g in grouped)
-            findings.Add(new LogFinding(g.Key.Kind!, $"{g.Key.Tag}: {g.Key.First}", g.Take(5).Select(x => x.Entry.Message).ToList(), g.Count()));
+            findings.Add(new LogFinding(g.Key.Kind!, $"{g.Key.Tag}: {Summary(g.First().Entry.Message)}", g.Take(5).Select(x => x.Entry.Message).ToList(), g.Count()));
 
         return findings;
     }
@@ -165,6 +166,9 @@ public sealed partial class LogcatMonitor
     }
 
     // "1795688435.684 16722 16755 D CompatChangeReporter: message"
+    [GeneratedRegex(@"0x[0-9a-fA-F]+|\d+")]
+    private static partial Regex NumbersRegex();
+
     // Tags can contain a colon ("unknown:ReactNative"): the tag ends at the first ": ".
     [GeneratedRegex(@"^\s*(\d+\.\d+)\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+(.+?)\s*: (.*)$")]
     private static partial Regex LineRegex();

@@ -91,7 +91,10 @@ public sealed partial class ResilienceRunner(AdbClient adb, Settings settings)
                 var entries = await monitor.ReadAsync(ct);
                 var now = await SafeAsync(() => LogcatMonitor.PidsAsync(adb, serial, package, ct)) ?? [];
                 var all = run.PidsBefore.Concat(now).Distinct().ToList();
-                run.Issues.AddRange(LogcatMonitor.ToIssues(LogcatMonitor.Analyze(entries, package, all)));
+                // Only what breaks the app counts here: the app's ordinary error and warning lines repeat on every
+                // relaunch and belong in monitor_session, not in each scenario.
+                run.Issues.AddRange(LogcatMonitor.ToIssues(LogcatMonitor.Analyze(entries, package, all)
+                    .Where(f => f.Kind is "crash" or "native-crash" or "anr" or "js-error")));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
