@@ -1,9 +1,9 @@
 {
   "name": "driftcheck-frida-probe",
   "private": true,
-  "description": "Frida agent that dumps the runtime properties of the Android View tree for Driftcheck.",
+  "description": "Frida agents for Driftcheck: the View tree probe and the HTTP/analytics recorder.",
   "scripts": {
-    "build": "frida-compile agent/index.js -o _agent.js -c"
+    "build": "frida-compile agent/index.js -o _agent.js -c && frida-compile recorder/index.js -o _recorder.js -c"
   },
   "devDependencies": {
     "frida-compile": "19.1.0",

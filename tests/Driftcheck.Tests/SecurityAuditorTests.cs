@@ -126,4 +126,12 @@ public class SecurityAuditorTests
         Assert.False(SecurityAuditor.LuhnValid("1234567890123456"));
         Assert.False(SecurityAuditor.LuhnValid(""));
     }
+
+    [Theory]
+    [InlineData("card 4111 1111 1111 1111 declined", true)]   // Visa test number
+    [InlineData("pan=5555555555554444", true)]                // Mastercard test number
+    [InlineData("key 2960123412341269 ok", false)]            // passes Luhn, no network starts with 29
+    [InlineData("hash a4111111111111111", false)]             // passes Luhn but glued to a letter: part of an identifier
+    public void CardNumbersNeedARealIssuerPrefix(string text, bool found) =>
+        Assert.Equal(found, SecurityAuditor.FindSecrets(text, "test").Any(m => m.Kind == "card-number"));
 }

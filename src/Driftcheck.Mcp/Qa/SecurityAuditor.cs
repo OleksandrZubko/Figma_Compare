@@ -204,6 +204,8 @@ public sealed partial class SecurityAuditor(AdbClient adb)
             if (digits.Length is < 13 or > 19 || digits.Distinct().Count() == 1 || !LuhnValid(digits)) continue;
             // A bare 13-digit number starting with 1 is a millisecond timestamp, not a card.
             if (digits.Length == 13 && digits[0] == '1' && m.Value.All(char.IsDigit)) continue;
+            // One random number in ten passes Luhn (image cache keys, hashes): it must also start like a real card.
+            if (!HasCardPrefix(digits)) continue;
             Add("card-number", digits);
         }
         foreach (Match m in PhoneRegex().Matches(text)) Add("phone", m.Value);
@@ -220,6 +222,22 @@ public sealed partial class SecurityAuditor(AdbClient adb)
         value = value.Trim();
         if (value.Length <= 8) return new string('*', value.Length);
         return value[..4] + "…" + value[^2..];
+    }
+
+    /// <summary>
+    /// The issuer prefix and length of the major networks: Visa, Mastercard, Amex, Discover, JCB, Diners, UnionPay.
+    /// </summary>
+    public static bool HasCardPrefix(string digits)
+    {
+        int P(int n) => int.Parse(digits[..n], System.Globalization.CultureInfo.InvariantCulture);
+        var len = digits.Length;
+        return (digits[0] == '4' && len is 13 or 16 or 19)                                            // Visa
+            || ((P(2) is >= 51 and <= 55 || P(4) is >= 2221 and <= 2720) && len == 16)                 // Mastercard
+            || (P(2) is 34 or 37 && len == 15)                                                         // Amex
+            || ((P(4) == 6011 || P(3) is >= 644 and <= 649 || P(2) == 65) && len is >= 16 and <= 19)   // Discover
+            || (P(4) is >= 3528 and <= 3589 && len is >= 16 and <= 19)                                 // JCB
+            || ((P(3) is >= 300 and <= 305 || P(2) is 36 or 38 or 39) && len is >= 14 and <= 19)       // Diners
+            || (P(2) == 62 && len is >= 16 and <= 19);                                                 // UnionPay
     }
 
     public static bool LuhnValid(string digits)
@@ -309,7 +327,8 @@ public sealed partial class SecurityAuditor(AdbClient adb)
     [GeneratedRegex(@"(?i)(?<![a-z])""?pass(?:word)?""?\s*[:=]\s*""?(?<v>[^""\s,}]{4,})")] private static partial Regex PasswordRegex();
     [GeneratedRegex(@"(?i)name=""[^""]*pass(?:word)?[^""]*"">(?<v>[^<]{4,})<")] private static partial Regex PasswordXmlRegex();
     [GeneratedRegex(@"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")] private static partial Regex EmailRegex();
-    [GeneratedRegex(@"(?<![\d-])(?:\d[ -]?){12,18}\d(?!\d)")] private static partial Regex CardRegex();
+    // Not glued to letters: digits inside an identifier or hash ("key5982…a1") aren't a card number.
+    [GeneratedRegex(@"(?<![\dA-Za-z_-])(?:\d[ -]?){12,18}\d(?![\dA-Za-z_])")] private static partial Regex CardRegex();
     [GeneratedRegex(@"(?<![\w+])\+\d{10,15}(?!\d)")] private static partial Regex PhoneRegex();
 
     // "Window #7 Window{5f516c5 u0 co.gifted.app/co.gifted.app.MainActivity}:"

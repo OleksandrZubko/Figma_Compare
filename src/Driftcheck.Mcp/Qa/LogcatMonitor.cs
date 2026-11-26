@@ -60,6 +60,7 @@ public sealed partial class LogcatMonitor
     /// </summary>
     public static IReadOnlyList<LogFinding> Analyze(IReadOnlyList<LogEntry> entries, string? package, IReadOnlyCollection<int> pids)
     {
+        entries = JoinMultiline(entries);
         var findings = new List<LogFinding>();
         var appPids = new HashSet<int>(pids);
 
@@ -97,11 +98,32 @@ public sealed partial class LogcatMonitor
                 ? e.Level is 'E' or 'F' ? "js-error" : e.Level == 'W' ? "js-warning" : null
                 : e.Level is 'E' or 'F' ? "error" : null))
             .Where(x => x.Kind is not null)
-            .GroupBy(x => (x.Kind, x.Entry.Tag, First: FirstLine(x.Entry.Message)));
+            .GroupBy(x => (x.Kind, x.Entry.Tag, First: Summary(x.Entry.Message)));
         foreach (var g in grouped)
             findings.Add(new LogFinding(g.Key.Kind!, $"{g.Key.Tag}: {g.Key.First}", g.Take(5).Select(x => x.Entry.Message).ToList(), g.Count()));
 
         return findings;
+    }
+
+    /// <summary>
+    /// One message logged as several lines (React Native prints objects across lines, Java stack traces too) comes
+    /// as consecutive entries with the same thread, level, tag and time: they're one entry. Crash blocks stay
+    /// line by line, since the crash parser reads them that way.
+    /// </summary>
+    public static IReadOnlyList<LogEntry> JoinMultiline(IReadOnlyList<LogEntry> entries)
+    {
+        var result = new List<LogEntry>(entries.Count);
+        foreach (var e in entries)
+        {
+            if (result.Count > 0 && result[^1] is var last && e.Tag != "AndroidRuntime" &&
+                last.Pid == e.Pid && last.Tid == e.Tid && last.Level == e.Level && last.Tag == e.Tag && Math.Abs(last.Epoch - e.Epoch) < 0.002 &&
+                // The same line again is a repeated message, not a continuation.
+                !last.Message.EndsWith(e.Message, StringComparison.Ordinal))
+                result[^1] = last with { Message = last.Message + "\n" + e.Message };
+            else
+                result.Add(e);
+        }
+        return result;
     }
 
     /// <summary>The issues for the report: crashes and ANRs are errors, JS errors too, the rest warnings.</summary>
@@ -119,6 +141,13 @@ public sealed partial class LogcatMonitor
         } + (f.Count > 1 ? $" ×{f.Count}" : ""),
         f.Summary));
 
+    /// <summary>A joined multi-line message on one line, at most 240 characters.</summary>
+    static string Summary(string s)
+    {
+        var line = string.Join(" ", s.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0));
+        return line.Length > 240 ? line[..240] : line;
+    }
+
     static string FirstLine(string s)
     {
         var line = s.Split('\n')[0].Trim();
@@ -128,7 +157,8 @@ public sealed partial class LogcatMonitor
     /// <summary>Pids of the package's processes (the app and its :remote services), or none if it isn't running.</summary>
     public static async Task<IReadOnlyList<int>> PidsAsync(AdbClient adb, string serial, string package, CancellationToken ct = default)
     {
-        var output = await adb.ShellAsync(serial, $"pidof {AdbClient.ShellQuote(package)}", ct);
+        // pidof exits with 1 when nothing runs, which adb reports as a failure.
+        var output = await adb.ShellAsync(serial, $"pidof {AdbClient.ShellQuote(package)} || true", ct);
         return output.Split([' ', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries)
             .Select(p => int.TryParse(p, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid) ? pid : -1)
             .Where(p => p > 0).ToList();

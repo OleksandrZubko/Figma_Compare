@@ -488,3 +488,6 @@ xcuserdata/
 .claude/settings.local.json
 docs/*.pdf
 brag-output/
+
+# Claude Code agent worktrees
+.claude/worktrees/

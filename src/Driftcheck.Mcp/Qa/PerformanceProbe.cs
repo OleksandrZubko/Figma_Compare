@@ -134,7 +134,11 @@ public sealed class PerformanceProbe(AdbClient adb, Settings settings)
         try
         {
             var output = await adb.ShellAsync(serial, $"dumpsys meminfo {AdbClient.ShellQuote(package)}", ct);
-            memory = ParseMeminfo(output) ?? throw new InvalidOperationException("meminfo has no App Summary (dump timed out or app not running)");
+            // The full dump asks the app for its object counts and times out when the app is busy; --local reads
+            // only the process's memory (no Views/Activities counts, which then stay 0).
+            var parsed = ParseMeminfo(output)
+                ?? ParseMeminfo(await adb.ShellAsync(serial, $"dumpsys meminfo --local {AdbClient.ShellQuote(package)}", ct));
+            memory = parsed ?? throw new InvalidOperationException("meminfo has no App Summary (app not running?)");
             if (memory.Activities > 1)
                 issues.Add(new QaIssue("memory", QaSeverity.Info, $"{memory.Activities} activities alive: possible leaked/duplicated activity",
                     $"Views: {memory.Views}"));
